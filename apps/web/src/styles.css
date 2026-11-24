@@ -160,3 +160,26 @@ table.t { width: 100%; border-collapse: collapse; }
 .auth-wrap { min-height: 100%; display: grid; place-items: center; padding: 32px 16px; background: var(--bg-subtle); }
 .auth-card { width: 100%; max-width: 420px; padding: 28px; }
 .code { font-family: var(--mono); background: var(--bg-hover); padding: 10px 12px; border-radius: var(--radius-sm); word-break: break-all; user-select: all; }
+
+/* ---------- additions ---------- */
+.inline { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.btn.danger-outline { color: var(--bad); border-color: #f3c3be; } .btn.danger-outline:hover { background: var(--bad-bg); }
+.right { text-align: right; } .nowrap { white-space: nowrap; }
+.neg { color: var(--bad); }
+.bubble { border: 1px solid var(--line); border-radius: var(--radius); padding: 12px 16px; margin-bottom: 10px; background: var(--bg); }
+.bubble.internal { background: var(--warn-bg); border-color: #f6dba5; }
+.chatbox { border: 1px solid var(--line); border-radius: var(--radius); background: var(--bg); display: flex; flex-direction: column; height: min(560px, 62vh); }
+.chat-body { flex: 1; overflow: auto; padding: 16px; display: grid; gap: 10px; align-content: start; }
+.chat-input { display: flex; gap: 8px; padding: 12px; border-top: 1px solid var(--line); }
+.msg.assistant { justify-self: start; }
+.codes { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 20px; margin: 12px 0; padding: 14px; background: var(--bg-subtle); border-radius: var(--radius-sm); }
+.secret { word-break: break-all; padding: 12px 14px; background: var(--bg-subtle); border: 1px solid var(--line); border-radius: var(--radius-sm); margin: 8px 0 12px; user-select: all; }
+.pre { margin: 0; padding: 12px 14px; background: var(--bg-subtle); border-radius: var(--radius-sm); overflow: auto; font-family: var(--mono); font-size: 12px; white-space: pre-wrap; word-break: break-all; }
+.roles { display: grid; gap: 8px; }
+.roles .check { align-items: flex-start; }
+.steps { margin-bottom: 4px; }
+.steps .step { font-size: 12.5px; }
+.payslip { max-width: 760px; }
+@media print { .side, .topbar, .no-print, .banner { display: none !important; } .shell { display: block; } .content { padding: 0; max-width: none; } .card { box-shadow: none; } }
+.inline .input, .actions .input, .inline select.input { width: auto; min-width: 0; }
+.inline .check { white-space: nowrap; }

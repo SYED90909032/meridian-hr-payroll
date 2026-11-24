@@ -12,6 +12,8 @@ export interface Me {
 interface Ctx { me: Me | null; ready: boolean; refresh: () => Promise<void>; signOut: () => Promise<void>; can: (...perms: string[]) => boolean; currency: string }
 const SessionCtx = createContext<Ctx>(null as unknown as Ctx);
 export const useSession = () => useContext(SessionCtx);
+/** For pages rendered only when signed in. */
+export function useMe(): Me { const m = useContext(SessionCtx).me; if (!m) throw new Error('Not signed in'); return m; }
 
 export function SessionProvider({ children }: { children: ReactNode }) {
   const [me, setMe] = useState<Me | null>(null);

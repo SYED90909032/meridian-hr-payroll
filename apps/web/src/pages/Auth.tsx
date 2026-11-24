@@ -80,7 +80,7 @@ export function Register() {
         <form onSubmit={submit}>
           <Field label="Company name"><input className="input" value={f.companyName} onChange={(e) => setF((x) => ({ ...x, companyName: e.target.value, slug: slugify(e.target.value) }))} required minLength={2} maxLength={120} autoFocus /></Field>
           <div className="row">
-            <Field label="Workspace address" hint="Lowercase letters, numbers, dashes."><input className="input" value={f.slug} onChange={set('slug')} required minLength={2} maxLength={41} pattern="[a-z0-9][a-z0-9-]*[a-z0-9]" /></Field>
+            <Field label="Workspace address" hint="Lowercase letters, numbers, dashes."><input className="input" value={f.slug} onChange={set('slug')} required minLength={2} maxLength={41} pattern="[a-z0-9][a-z0-9\-]*[a-z0-9]" /></Field>
             <Field label="Country" hint="Pay rules ship for UAE first."><select className="input" value={f.country} onChange={set('country')}><option value="AE">United Arab Emirates</option></select></Field>
           </div>
           <Field label="Your name"><input className="input" value={f.displayName} onChange={set('displayName')} required minLength={2} maxLength={100} autoComplete="name" /></Field>
