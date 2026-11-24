@@ -29,3 +29,10 @@ main.ts + worker.ts + seed.ts, API integration tests, web UI (React+Vite, white 
 ## Honesty notes for final reply
 UAE pack L0 (overtime rules, unpaid-leave day basis, 50% deduction cap unverified); WPS file unverified with any bank; Emirates ID check digit not enforced; email delivery not implemented (approval tokens exist, no mail provider);
 RLS needs expert review; D1-D16 provisional; D11 KMS open; staged: Rust/WASM, edge, Go bridge, mobile, passkeys, OIDC, SCIM, other countries.
+
+## Status update (build session 2)
+- All API modules now exist and typecheck clean (platform, audit, insight, assistant, main.ts, worker.ts). Migrations 001-011 applied to meridian_test.
+- Commits: fefabe8 (API layer), fd7919a (tests + fixes). Pushed.
+- Tests green: 26 DB + 14 api-auth + 9 api-pay + 9 api-pay-live (+33 engine). Test helpers: test/api-helpers.ts (boot, actor, ownerOf, stepUp, loginForEmployee), test/pay-fixtures.ts (payWorld, runTo), src/testing/client.ts (inject client).
+- Fixed: app role cannot read kernel.user_account (use kernel.membership for display names); approve now refuses with open blocking exceptions; 011 lets payroll actor update exceptions (waive).
+- TODO next: seed.ts; tests for people/leave/time/approvals/helpdesk/webhooks (SSRF)/audit seal/assistant; web UI (apps/web); docs; CI; Dockerfile; final push.
