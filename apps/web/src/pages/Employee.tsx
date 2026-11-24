@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { ApiError, download, errMsg, fmtDate, fmtDateTime, fromMinor, get, money, post, put, toMinor } from '../api';
+import { ApiError, download, errMsg, fmtDate, fmtDateTime, fromMinor, get, money, patch, post, put, toMinor } from '../api';
 import { useSession } from '../session';
 import { Avatar, Banner, Card, ConfirmModal, Chip, Empty, ErrorBox, Field, FormModal, Loading, PageHead, StatusChip, Table, Tabs, useAsync, useToast } from '../ui';
 import type { EmployeeRow } from './People';
@@ -83,7 +83,6 @@ function EditModal({ e, onClose, onDone }: { e: EmployeeRow; onClose: () => void
   );
 }
 async function api_patch(id: string, body: Record<string, unknown>) {
-  const { patch } = await import('../api');
   try { return await patch(`/people/employees/${id}`, body); } catch (x) { if (x instanceof ApiError && x.status === 409) throw new Error('Someone else changed this record. Reload and try again.'); throw x; }
 }
 function TerminateModal({ id, onClose, onDone }: { id: string; onClose: () => void; onDone: () => void }) {

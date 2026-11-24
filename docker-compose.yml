@@ -1,0 +1,52 @@
+# Local evaluation stack. NOT a production deployment: change every password, put TLS in front, and read docs/SECURITY.md.
+# Usage:
+#   cp .env.example .env   # then set MERIDIAN_MASTER_KEY and MERIDIAN_SIGNING_KEY (openssl rand -base64 32)
+#   docker compose up --build
+#   docker compose run --rm migrate && docker compose run --rm seed
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_PASSWORD: change-me-superuser
+      POSTGRES_DB: meridian
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./scripts/db-bootstrap.sql:/docker-entrypoint-initdb.d/01-bootstrap.sql:ro
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U postgres']
+      interval: 5s
+      retries: 10
+  migrate:
+    build: .
+    profiles: ['tools']
+    command: ['node', 'apps/api/dist/db/migrate-cli.js']
+    environment: &dburls
+      DATABASE_URL_OWNER: postgres://meridian_owner:CHANGE_ME_owner@db:5432/meridian
+      DATABASE_URL_APP: postgres://meridian_app:CHANGE_ME_app@db:5432/meridian
+      DATABASE_URL_AUTH: postgres://meridian_auth:CHANGE_ME_auth@db:5432/meridian
+      DATABASE_URL_WORKER: postgres://meridian_worker:CHANGE_ME_worker@db:5432/meridian
+    depends_on:
+      db: { condition: service_healthy }
+  api:
+    build: .
+    ports: ['8080:8080']
+    environment:
+      <<: *dburls
+      NODE_ENV: production
+      COOKIE_SECURE: 'false' # evaluation over plain http only; leave 'auto' behind TLS
+      MERIDIAN_MASTER_KEY: ${MERIDIAN_MASTER_KEY:?set in .env}
+      MERIDIAN_SIGNING_KEY: ${MERIDIAN_SIGNING_KEY:?set in .env}
+    depends_on:
+      db: { condition: service_healthy }
+  worker:
+    build: .
+    command: ['node', 'apps/api/dist/worker.js']
+    environment:
+      <<: *dburls
+      NODE_ENV: production
+      MERIDIAN_MASTER_KEY: ${MERIDIAN_MASTER_KEY:?set in .env}
+      MERIDIAN_SIGNING_KEY: ${MERIDIAN_SIGNING_KEY:?set in .env}
+    depends_on:
+      db: { condition: service_healthy }
+volumes:
+  pgdata:

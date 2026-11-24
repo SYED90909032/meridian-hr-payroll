@@ -1,0 +1,62 @@
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      PGPASSWORD: postgres
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Create database roles and test database
+        run: |
+          sed -e "s/CHANGE_ME_owner/owner_dev_pw/; s/CHANGE_ME_app/app_dev_pw/; s/CHANGE_ME_auth/auth_dev_pw/; s/CHANGE_ME_worker/worker_dev_pw/" scripts/db-bootstrap.sql | psql -h localhost -U postgres -v ON_ERROR_STOP=1
+          psql -h localhost -U postgres -c "create database meridian_test owner meridian_owner"
+          psql -h localhost -U postgres -d meridian_test -c "create extension if not exists pgcrypto; create extension if not exists citext;" || true
+      - name: Prepare .env for tests (throwaway CI credentials only)
+        run: |
+          cat > .env <<EOF
+          NODE_ENV=test
+          DATABASE_URL_OWNER=postgres://meridian_owner:owner_dev_pw@localhost:5432/meridian
+          DATABASE_URL_APP=postgres://meridian_app:app_dev_pw@localhost:5432/meridian
+          DATABASE_URL_AUTH=postgres://meridian_auth:auth_dev_pw@localhost:5432/meridian
+          DATABASE_URL_WORKER=postgres://meridian_worker:worker_dev_pw@localhost:5432/meridian
+          EOF
+      - name: Apply migrations to the test database
+        run: DATABASE_URL_OWNER=postgres://meridian_owner:owner_dev_pw@localhost:5432/meridian_test pnpm db:migrate
+      - run: pnpm typecheck
+      - name: Dependency audit (production dependencies)
+        run: pnpm audit --prod
+      - run: pnpm test
+      - run: pnpm --filter @meridian/web build
+      - run: pnpm --filter @meridian/api build
+      - name: Secret scan (tracked files)
+        run: |
+          if git ls-files | xargs grep -nIE 'BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY|ghp_[A-Za-z0-9]{30,}|AKIA[0-9A-Z]{16}'; then echo "possible secret committed"; exit 1; fi
+
+  image:
+    runs-on: ubuntu-latest
+    needs: verify
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t meridian:ci .

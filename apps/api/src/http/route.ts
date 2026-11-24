@@ -1,7 +1,6 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
-import type { ZodTypeAny, z } from 'zod';
-import { ZodError } from 'zod';
-import { zodToJsonSchema } from 'zod-to-json-schema';
+import type { ZodTypeAny } from 'zod';
+import { ZodError, z } from 'zod';
 import type { Config } from '../config.js';
 import type { Pools } from '../db/pool.js';
 import type { Kms } from '../crypto/kms.js';
@@ -136,6 +135,12 @@ export function defineRoute<B extends ZodTypeAny = ZodTypeAny, Q extends ZodType
   });
 }
 
+function toSchema(schema: ZodTypeAny): Record<string, unknown> {
+  const js = z.toJSONSchema(schema, { target: 'openapi-3.0', io: 'input', unrepresentable: 'any', reused: 'inline' }) as Record<string, unknown>;
+  delete js.$schema;
+  return js;
+}
+
 export function openApiDocument(routes: RouteMeta[]): Record<string, unknown> {
   const paths: Record<string, Record<string, unknown>> = {};
   for (const r of routes) {
@@ -147,9 +152,9 @@ export function openApiDocument(routes: RouteMeta[]): Record<string, unknown> {
       'x-required-permission': r.perm ?? null, 'x-step-up': r.stepUp, 'x-idempotency': r.idempotent ?? null,
       responses: { '200': { description: 'OK' }, '400': { description: 'Invalid request' }, '401': { description: 'Not signed in' }, '403': { description: 'Not allowed' } },
     };
-    if (r.body) op.requestBody = { required: true, content: { 'application/json': { schema: zodToJsonSchema(r.body, { target: 'openApi3', $refStrategy: 'none' }) } } };
+    if (r.body) op.requestBody = { required: true, content: { 'application/json': { schema: toSchema(r.body) } } };
     if (r.query) {
-      const js = zodToJsonSchema(r.query, { target: 'openApi3', $refStrategy: 'none' }) as { properties?: Record<string, unknown>; required?: string[] };
+      const js = toSchema(r.query) as { properties?: Record<string, unknown>; required?: string[] };
       (op.parameters as unknown[]).push(...Object.entries(js.properties ?? {}).map(([name, schema]) => ({ name, in: 'query', required: js.required?.includes(name) ?? false, schema })));
     }
     (paths[p] ??= {})[r.method.toLowerCase()] = op;

@@ -127,7 +127,7 @@ export async function buildApp(cfg: Config, pools: Pools): Promise<{ app: Fastif
   app.get('/api/v1/openapi.json', { config: { rateLimit: { max: 60, timeWindow: '1 minute' } } }, async () => openApiDocument(svc.routes));
 
   if (cfg.WEB_DIST && existsSync(cfg.WEB_DIST)) {
-    await app.register(fastifyStatic, { root: cfg.WEB_DIST, wildcard: false, maxAge: '1h', setHeaders: (res, path) => { if (path.endsWith('index.html')) res.setHeader('Cache-Control', 'no-cache'); } });
+    await app.register(fastifyStatic, { root: cfg.WEB_DIST, wildcard: false, maxAge: '1h', setHeaders: (reply, path) => { if (path.endsWith('index.html')) reply.header('Cache-Control', 'no-cache'); } });
   }
   return { app, svc };
 }
