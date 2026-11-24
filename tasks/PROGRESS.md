@@ -1,16 +1,31 @@
 # Build progress (handoff note)
 
-Repo: /home/ubuntu/projects/hr-payroll-10987a11/meridian (git, branch main). GitHub target: SYED90909032 account (gh authenticated), create private repo `meridian-hr-payroll`, push at the end of each major slice.
+Repo: /home/ubuntu/projects/hr-payroll-10987a11/meridian (branch main). GitHub: https://github.com/SYED90909032/meridian-hr-payroll (private). `gh` is authenticated.
+DB: PostgreSQL 16 local; DBs `meridian` and `meridian_test`; roles meridian_owner/app/auth/worker (passwords in .env). Start: `sudo pg_ctlcluster 16 main start`. Reset test DB: `./scripts/db-reset.sh meridian_test`.
+Tests: `pnpm --filter @meridian/api test` (vitest, real Postgres, env from ../../.env with /meridian swapped to /meridian_test).
 
-DB (local): PostgreSQL 16, databases `meridian` and `meridian_test`; roles meridian_owner/app/auth/worker (passwords in .env, gitignored). Start with `sudo pg_ctlcluster 16 main start`.
-pnpm 11: build scripts allowed through `allowBuilds` in pnpm-workspace.yaml.
+## Done and committed
+- Slice 1 engine (33 tests). Slice 2 DB: migrations 001-006, 26 DB security tests green (commit 0afae56, pushed).
 
-Done: slice 1 engine (33 tests green, committed). Migrations 001 and 002 written (not yet run).
-Next: migrations 003 (flow, time), 004 (pay), 005 (svc, plat, ai); migration runner; API (Fastify) modules; tests on meridian_test; web UI; CI; push.
+## Written since, NOT yet committed or typechecked/run
+- migration 007 (auth columns, recovery codes, login attempts), 008 (time hardening + flow policies, approver_ids denormalised columns).
+- apps/api/src: config.ts, errors.ts, db/{pool,tx,migrate,migrate-cli}.ts, crypto/{kms,password,totp,tokens}.ts, http/{perms,principal,route}.ts, app.ts,
+  modules/iam/{registration,auth,routes}.ts, modules/people/{lib,routes}.ts, modules/flow/{notify,lib,routes}.ts, modules/time/lib.ts.
+- app.ts imports route modules that do NOT exist yet: time/routes, pay/routes, service/routes, platform/routes, audit/routes, insight/routes, assistant/routes. Create them (or stub) before typecheck.
 
-Design notes to keep:
-- App role has FORCE RLS everywhere; definer functions only for audit, outbox claim, punch partitions.
-- Registration: set app.tenant_id to the new tenant id, insert tenant row (policy allows it), user_account via the auth pool.
-- Pay run unique index excludes only cancelled and reversed (rejected stays active). Resolves the open point in v2.1.
-- UAE pack assurance L0: live runs and payment_released are blocked by trigger.
-- Terminology: class names comp, bank, national_id, pay, payslip, helpdesk_conf, helpdesk, special_leave, document, team, audit.
+## Conventions
+- All routes via defineRoute(svc, {...}) (auth, perm, stepUp, idempotent, actors, tx). System actors set per tx: register, iam, hr, time, flow, payroll (RLS policies check app.system(kind)).
+- Data classes enforced by RLS; permissions by role in http/perms.ts.
+- CSRF: Origin==Host check + X-Meridian-Client: web header on cookie-authenticated mutations.
+- The `write` tool refuses to overwrite existing files: rm first, or use `edit`.
+
+## Remaining
+(Update: 007/008 applied, 26 DB tests green. New unrun migrations 009_system_reads, 010_pay_adjustments. Written but NOT typechecked: time/{routes,leave,attendance}.ts, pay/{inputs,service,routes,payslips}.ts, service/routes.ts, http/schemas.ts, db/tx.ts withActor, migrate-cli syncPacks. Still missing: platform/routes, audit/routes, insight/routes, assistant/routes, main.ts, worker.ts, seed.ts.)
+
+time/routes (devices, ingest/punches, attendance, shifts, holidays, leave + registerApprovalHandler('leave')), pay module (engine integration, run lifecycle, SIF, payslips),
+service (tickets, announcements, KB), platform (API keys, webhooks, worker, SSRF guard), audit routes (list, verify, seal Merkle Ed25519), insight, assistant,
+main.ts + worker.ts + seed.ts, API integration tests, web UI (React+Vite, white Astryx-like), CI, Dockerfile, README, THREAT_MODEL, SECURITY, final push, final reply.
+
+## Honesty notes for final reply
+UAE pack L0 (overtime rules, unpaid-leave day basis, 50% deduction cap unverified); WPS file unverified with any bank; Emirates ID check digit not enforced; email delivery not implemented (approval tokens exist, no mail provider);
+RLS needs expert review; D1-D16 provisional; D11 KMS open; staged: Rust/WASM, edge, Go bridge, mobile, passkeys, OIDC, SCIM, other countries.

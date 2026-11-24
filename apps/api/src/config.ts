@@ -17,6 +17,7 @@ const schema = z.object({
   SESSION_ABSOLUTE_HOURS: z.coerce.number().int().min(1).max(72).default(12),
   OPENAI_API_KEY: z.string().optional(),
   OPENAI_API_BASE: z.string().optional(),
+  ASSISTANT_MODEL: z.string().optional(),
   TRUST_PROXY: z.enum(['true', 'false']).default('false'),
 });
 

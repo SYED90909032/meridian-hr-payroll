@@ -49,3 +49,10 @@ export async function emit(db: Db, ctx: Ctx, topic: string, payload: Record<stri
     [ctx.tenantId, topic, JSON.stringify(payload), dedupeKey ?? null],
   );
 }
+
+/** Raises one system actor for a small block of work, then restores the previous setting. Keeps the elevated window as small as possible. */
+export async function withActor<T>(db: Db, actor: SystemActor, fn: () => Promise<T>): Promise<T> {
+  const prev = (await db.query<{ v: string }>(`select coalesce(current_setting('app.system_actor', true), '') as v`)).rows[0]!.v;
+  await db.query(`select set_config('app.system_actor', $1, true)`, [prev ? `${prev},${actor}` : actor]);
+  try { return await fn(); } finally { await db.query(`select set_config('app.system_actor', $1, true)`, [prev]); }
+}

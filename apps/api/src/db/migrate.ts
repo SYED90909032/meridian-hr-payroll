@@ -38,3 +38,18 @@ export async function migrate(ownerUrl: string, dir: string): Promise<MigrateRes
   }
   return { applied, skipped };
 }
+
+/**
+ * Records the packs shipped with this build in the global registry, at the assurance the build claims (L0 for the UAE pack).
+ * It never raises or lowers the assurance of an existing row: that is a human review step done as the owner role.
+ */
+export async function syncPacks(ownerUrl: string, packs: { id: string; version: string; hash: string; assurance: string }[]): Promise<void> {
+  const client = new pg.Client({ connectionString: ownerUrl });
+  await client.connect();
+  try {
+    for (const p of packs) {
+      await client.query('insert into pay.pack_registry (pack_id, version, pack_hash, assurance, notes) values ($1, $2, $3, $4, $5) on conflict (pack_id, version) do nothing',
+        [p.id, p.version, p.hash, p.assurance, 'Registered by the build. Not reviewed.']);
+    }
+  } finally { await client.end(); }
+}
