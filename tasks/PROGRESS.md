@@ -36,3 +36,9 @@ RLS needs expert review; D1-D16 provisional; D11 KMS open; staged: Rust/WASM, ed
 - Tests green: 26 DB + 14 api-auth + 9 api-pay + 9 api-pay-live (+33 engine). Test helpers: test/api-helpers.ts (boot, actor, ownerOf, stepUp, loginForEmployee), test/pay-fixtures.ts (payWorld, runTo), src/testing/client.ts (inject client).
 - Fixed: app role cannot read kernel.user_account (use kernel.membership for display names); approve now refuses with open blocking exceptions; 011 lets payroll actor update exceptions (waive).
 - TODO next: seed.ts; tests for people/leave/time/approvals/helpdesk/webhooks (SSRF)/audit seal/assistant; web UI (apps/web); docs; CI; Dockerfile; final push.
+
+## Status update (web UI in progress)
+- API tests now 117 passing (7 files) + 33 engine. Migration 012 fixes ticket RLS recursion. `pnpm db:seed` works (demo company "Al Noor Trading", creds printed).
+- apps/web: Vite+React19+react-router. Written so far: styles.css, api.ts, ui.tsx, session.tsx, App.tsx, main.tsx, pages Auth/Dashboard/People/Employee.
+- STILL TO WRITE in apps/web/src/pages (default exports, lazy imported in App.tsx): Org, Time, Leave, Approvals, Payroll, PayRun, Payslips, Helpdesk (routes helpdesk and helpdesk/:id), Assistant, Audit, Security, Access, Integrations. Then: pnpm --filter @meridian/web build, run API with WEB_DIST=apps/web/dist, screenshot, fix.
+- Dev server: API on :8080 (`LOG_LEVEL=warn npx tsx src/main.ts` in apps/api), seeded owner creds from `pnpm db:seed` output.
