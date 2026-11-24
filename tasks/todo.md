@@ -1,0 +1,11 @@
+# Task list
+- [ ] 1 Scaffold + engine + tests
+- [ ] 2 DB migrations + RLS + audit chain + cross-tenant tests
+- [ ] 3 Kernel API (auth, TOTP, step-up, RBAC, idempotency)
+- [ ] 4 People-core API
+- [ ] 5 Flow approvals
+- [ ] 6 Time and leave
+- [ ] 7 Pay runs
+- [ ] 8 Service, assistant, insight, platform
+- [ ] 9 Web UI
+- [ ] 10 Security pass, docs, CI, push
