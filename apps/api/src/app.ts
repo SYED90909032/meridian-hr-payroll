@@ -31,7 +31,7 @@ const PUBLIC_ERRORS = new Set([400, 401, 403, 404, 409, 410, 413, 415, 422, 429]
 export async function buildApp(cfg: Config, pools: Pools): Promise<{ app: FastifyInstance; svc: Services }> {
   const app = Fastify({
     logger: cfg.NODE_ENV === 'test' && process.env.MERIDIAN_TEST_LOG !== 'on' ? false : {
-      level: 'info',
+      level: process.env.LOG_LEVEL ?? 'info',
       redact: { paths: ['req.headers.authorization', 'req.headers.cookie', 'req.headers["x-api-key"]', 'req.headers["x-device-key"]', 'res.headers["set-cookie"]'], censor: '[redacted]' },
     },
     trustProxy: cfg.TRUST_PROXY === 'true',
