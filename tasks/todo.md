@@ -8,7 +8,7 @@
 - [x] 7 Pay runs
 - [x] 8 Service, assistant, insight, platform
 - [x] 9 Web UI (17 pages, driven end to end in a headless browser; screenshots in docs/screenshots)
-- [~] 10 Security pass, docs, CI, push: dependency audit clean, SECURITY.md, THREAT_MODEL.md, README, Dockerfile, CI written. Docker image not built locally (no daemon); CI workflow not yet run on GitHub at time of writing.
+- [~] 10 Security pass, docs, CI, push: dependency audit clean, SECURITY.md, THREAT_MODEL.md, README, Dockerfile, CI written. CI (typecheck, audit, tests on a fresh Postgres, builds, secret scan, Docker image build) passes on GitHub; the image was not run locally (no Docker daemon in the dev sandbox).
 
 ## Not done (staged, see docs/SPEC.md section 8)
 Rust/WASM engine, edge workers, Go bridge, mobile apps, passkeys, OIDC/SAML, SCIM, MCP OAuth, Drive/SharePoint connectors, talent and rewards, other countries, email delivery, leave proration, web unit tests, independent RLS review, UAE pack review (L0), bank WPS validation.
