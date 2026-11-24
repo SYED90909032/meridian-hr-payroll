@@ -44,7 +44,7 @@ export function registerServiceRoutes(svc: Services): void {
         `select t.id, t.category, t.subject, t.body, t.confidential, t.status, t.assignee_user_id, t.requester_employee_id, t.created_at, t.updated_at, e.first_name, e.last_name
            from svc.ticket t join people.employee e on e.id = t.requester_employee_id where t.id = $1`, [id]);
       if (!t.rows[0]) throw notFound('Ticket not found');
-      const c = await db.query(`select c.id, c.author_user_id, u.display_name as author, c.body, c.internal, c.created_at from svc.ticket_comment c left join kernel.user_account u on u.id = c.author_user_id where c.ticket_id = $1 order by c.created_at`, [id]);
+      const c = await db.query(`select c.id, c.author_user_id, u.display_name as author, c.body, c.internal, c.created_at from svc.ticket_comment c left join kernel.membership u on u.user_id = c.author_user_id where c.ticket_id = $1 order by c.created_at`, [id]);
       if (t.rows[0].confidential && t.rows[0].requester_employee_id !== p.employeeId) await audit('ticket.confidential_read', 'ticket', id, {});
       return { ticket: t.rows[0], comments: c.rows };
     },
@@ -98,7 +98,7 @@ export function registerServiceRoutes(svc: Services): void {
   // ---------------------------------------------------------------- announcements
   defineRoute(svc, {
     method: 'GET', path: '/api/v1/svc/announcements', summary: 'Announcements', tag: 'Helpdesk', auth: 'session',
-    handler: async ({ db }) => ({ announcements: (await db.query('select a.id, a.title, a.body, a.published_at, u.display_name as author from svc.announcement a left join kernel.user_account u on u.id = a.author_user_id order by a.published_at desc limit 50')).rows }),
+    handler: async ({ db }) => ({ announcements: (await db.query('select a.id, a.title, a.body, a.published_at, u.display_name as author from svc.announcement a left join kernel.membership u on u.user_id = a.author_user_id order by a.published_at desc limit 50')).rows }),
   });
   defineRoute(svc, {
     method: 'POST', path: '/api/v1/svc/announcements', summary: 'Post an announcement', tag: 'Helpdesk', auth: 'session', perm: 'content.write',

@@ -59,7 +59,8 @@ export function defineRoute<B extends ZodTypeAny = ZodTypeAny, Q extends ZodType
 
   svc.app.route({
     method: def.method, url: def.path, bodyLimit: def.bodyLimit,
-    config: def.rateLimit ? { rateLimit: def.rateLimit } : undefined,
+    // Tests would otherwise trip the per-route limits that exist to stop password guessing. A test sets MERIDIAN_TEST_RATELIMIT=on to exercise them.
+    config: def.rateLimit ? { rateLimit: svc.cfg.NODE_ENV === 'test' && process.env.MERIDIAN_TEST_RATELIMIT !== 'on' ? { ...def.rateLimit, max: def.rateLimit.max * 1000 } : def.rateLimit } : undefined,
     handler: async (req, reply) => {
       const p = (req as FastifyRequest & { principal?: Principal | null }).principal ?? null;
 

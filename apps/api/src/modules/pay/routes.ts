@@ -8,7 +8,7 @@ import { calculateRun, currentResultSetHash, finaliseRun, loadRun, lockInputs, m
 import { registerPayslipRoutes } from './payslips.js';
 
 const daysBetween = (a: string, b: string): number => Math.round((Date.parse(b + 'T00:00:00Z') - Date.parse(a + 'T00:00:00Z')) / 86_400_000);
-const RUN_COLS = `r.id, r.pay_group_id, g.name as pay_group_name, r.period_start::text, r.period_end::text, r.run_type, r.mode, r.scope_key, r.status, r.pack_id, r.pack_version, r.pack_hash,
+const RUN_COLS = `r.id, r.pay_group_id, g.name as pay_group_name, r.period_start::text, r.period_end::text, r.run_type, r.mode, r.scope_key, r.status, r.pack_id, r.pack_version, r.pack_hash, r.engine_hash,
   r.input_set_hash, r.result_set_hash, r.bank_file_hash, r.prepared_by, r.created_at, r.locked_at, r.calculated_at, r.finalised_at, r.version`;
 
 export function registerPayRoutes(svc: Services): void {
@@ -132,7 +132,7 @@ export function registerPayRoutes(svc: Services): void {
       if (!run) throw notFound('Pay run not found');
       const events = (await db.query('select from_status, to_status, actor_user_id, reason, at from pay.run_event where pay_run_id = $1 order by at', [id])).rows;
       const exceptions = (await db.query(`select x.id, x.employee_id, e.first_name, e.last_name, x.code, x.severity, x.message, x.status, x.waived_reason from pay.payroll_exception x left join people.employee e on e.id = x.employee_id where x.pay_run_id = $1 and x.status <> 'resolved' order by x.severity, x.created_at`, [id])).rows;
-      const approvals = (await db.query(`select a.id, a.kind, a.approver_id, u.display_name, a.flagged_self_approval, a.release_not_before, a.voided_at, a.created_at from pay.pay_run_approval a left join kernel.user_account u on u.id = a.approver_id where a.pay_run_id = $1 order by a.created_at`, [id])).rows;
+      const approvals = (await db.query(`select a.id, a.kind, a.approver_id, u.display_name, a.flagged_self_approval, a.release_not_before, a.voided_at, a.created_at from pay.pay_run_approval a left join kernel.membership u on u.user_id = a.approver_id where a.pay_run_id = $1 order by a.created_at`, [id])).rows;
       const totals = (await db.query(
         `select count(*) filter (where status = 'ok')::int as employees, count(*) filter (where status = 'excluded')::int as excluded,
                 coalesce(sum(gross_minor) filter (where status = 'ok'), 0)::float8 as gross_minor, coalesce(sum(net_minor) filter (where status = 'ok'), 0)::float8 as net_minor,
@@ -227,6 +227,8 @@ export function registerPayRoutes(svc: Services): void {
     body: z.object({ resultSetHash: z.string().regex(/^[a-f0-9]{64}$/) }).strict(),
     handler: async ({ db, ctx, p, params, body, audit }) => {
       const r = await run(db, params.id); need(r, 'in_review');
+      const blocking = (await db.query(`select count(*)::int as n from pay.payroll_exception where pay_run_id = $1 and severity = 'blocking' and status = 'open'`, [r.id])).rows[0].n as number;
+      if (blocking > 0) throw new HttpError(409, 'blocking_exceptions', `${blocking} blocking exception(s) are still open. Resolve or accept each one with a reason before approving.`);
       const now = await currentResultSetHash(db, r);
       if (body.resultSetHash !== r.result_set_hash || now !== r.result_set_hash) throw new HttpError(409, 'content_changed', 'The results changed after you opened them. Reload and review again.');
       const a = await db.query('insert into pay.pay_run_approval (tenant_id, pay_run_id, kind, approver_id, result_set_hash, step_up_at) values ($1, $2, $3, $4, $5, $6) returning flagged_self_approval, release_not_before', [ctx.tenantId, r.id, 'approve', ctx.userId, r.result_set_hash, p.stepUpAt]);

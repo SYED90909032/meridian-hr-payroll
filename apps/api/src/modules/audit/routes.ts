@@ -16,7 +16,7 @@ export function registerAuditRoutes(svc: Services): void {
       args.push(query.limit);
       const r = await db.query(
         `select e.seq, e.at, e.actor_user_id, u.display_name as actor, e.action, e.entity, e.entity_id, e.data, e.ip, e.hash
-           from kernel.audit_event e left join kernel.user_account u on u.id = e.actor_user_id
+           from kernel.audit_event e left join kernel.membership u on u.user_id = e.actor_user_id
           ${where.length ? 'where ' + where.join(' and ') : ''} order by e.seq desc limit $${args.length}`, args);
       return { events: r.rows };
     },
