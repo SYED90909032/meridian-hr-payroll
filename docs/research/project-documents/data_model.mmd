@@ -1,0 +1,26 @@
+erDiagram
+    TENANT ||--o{ LEGAL_ENTITY : owns
+    LEGAL_ENTITY ||--o{ EMPLOYMENT : employs
+    PERSON ||--o{ EMPLOYMENT : "has (employee, contractor, intern, gig)"
+    EMPLOYMENT ||--o{ ASSIGNMENT : "effective-dated"
+    ASSIGNMENT }o--|| POSITION : fills
+    POSITION }o--|| ORG_UNIT : "belongs to"
+    ASSIGNMENT }o--|| LOCATION : "works at"
+    ASSIGNMENT ||--o{ COMP_ELEMENT : "effective-dated pay"
+    EMPLOYMENT ||--o{ TIME_EVENT : "append-only"
+    EMPLOYMENT ||--o{ LEAVE_LEDGER_ENTRY : "accruals and debits"
+    POLICY ||--o{ POLICY_VERSION : "versioned"
+    POLICY_VERSION }o--o{ ASSIGNMENT : "applies via eligibility rules"
+    LEGAL_ENTITY ||--o{ PAY_GROUP : runs
+    PAY_GROUP ||--o{ PAY_RUN : "per period"
+    PAY_RUN ||--o{ PAY_RESULT : "one per employment"
+    PAY_RESULT ||--o{ PAY_LINE : "earnings, deductions, employer cost"
+    COUNTRY_PACK_VERSION ||--o{ PAY_RUN : "pinned at calc time"
+    PERSON ||--o{ DOCUMENT : "encrypted files"
+    EMPLOYMENT ||--o{ GOAL : sets
+    EMPLOYMENT ||--o{ REVIEW : receives
+    REQUISITION ||--o{ APPLICATION : receives
+    CANDIDATE ||--o{ APPLICATION : submits
+    APPLICATION |o--o| EMPLOYMENT : "becomes on hire"
+    EMPLOYMENT ||--o{ CASE : raises
+    AUDIT_EVENT }o--|| TENANT : "hash-chained per tenant"

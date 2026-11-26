@@ -1,0 +1,100 @@
+direction: down
+
+clients: Clients and channels {
+  style.fill: "#F4F6FA"
+  web: Web app\n(React PWA, WCAG 2.2 AA, RTL)
+  mobile: Mobile app\n(offline-first, signed punches)
+  edgeagent: Edge agent\n(biometric devices, kiosks)
+  chat: Chat channels\n(Slack, Teams, WhatsApp)
+  extagents: External AI agents\n(any MCP client)
+  partners: Partner systems\n(ERP, banks, gov portals)
+}
+
+edge: Global edge {
+  style.fill: "#E8EEF9"
+  waf: CDN + WAF + rate limits
+  router: Cell router\n(tenant -> region + cell)
+}
+
+control: Shared control plane {
+  style.fill: "#FFF4E5"
+  prov: Tenant provisioning\n+ metering
+  packs: Country-pack registry\n(signed, versioned)
+  flags: Releases + feature flags\n(OpenFeature)
+  obs: Observability\n(OpenTelemetry)
+}
+
+cell: Regional cell (repeatable unit, e.g. IN-1, AE-1, EU-1, US-1) {
+  style.fill: "#EEF7EE"
+
+  access: Access layer {
+    api: REST API (OpenAPI 3.1)\nSCIM 2.0, webhooks
+    mcp: MCP server\n(OAuth 2.1, scoped tools)
+  }
+
+  core: Core application (modular monolith) {
+    people: People core
+    time: Time ledger
+    pay: Pay
+    talent: Talent
+    rewards: Rewards
+    service: Service desk
+    insight: Insight
+  }
+
+  kernel: Platform kernel {
+    authz: AuthN (OIDC) + AuthZ\n(ReBAC + field policies)
+    audit: Hash-chained audit ledger
+    meta: Metadata engine\n(custom fields, objects, forms)
+    wf: Workflow + policy engine
+  }
+
+  workers: Workers {
+    durable: Durable workflows\n(Temporal)
+    engine: Payroll compute engine\n(Rust, deterministic)
+    connectors: Integration connectors\n(banks, statutory, ERP)
+  }
+
+  data: Data layer {
+    pg: PostgreSQL\n(RLS, bitemporal records)
+    bus: Outbox -> NATS JetStream
+    obj: Object storage\n(per-tenant envelope keys)
+    olap: ClickHouse analytics\n(via CDC)
+    kms: Key management\n(OpenBao / cloud KMS, BYOK)
+  }
+
+  access -> core: commands + queries
+  core -> kernel
+  core -> workers: jobs
+  core -> data.pg
+  data.pg -> data.bus: outbox
+  data.bus -> data.olap
+  workers -> data.pg
+  kernel.audit -> data.pg
+  data.obj -> data.kms: wrap keys
+}
+
+ai: Intelligence plane (per region) {
+  style.fill: "#F3ECFB"
+  gateway: Model gateway\n(cloud LLM or self-hosted open-weight)
+  redact: PII redaction +\ntokenization
+  rag: Tenant-partitioned retrieval\n(pgvector)
+  runtime: Agent runtime\n(plans, approvals, evals)
+  runtime -> redact -> gateway
+  runtime -> rag
+}
+
+clients.web -> edge.waf
+clients.mobile -> edge.waf
+clients.chat -> edge.waf
+clients.extagents -> edge.waf
+clients.partners -> edge.waf
+clients.edgeagent -> edge.waf
+edge.waf -> edge.router
+edge.router -> cell.access
+cell.core -> ai.runtime: assistant + agents
+ai.runtime -> cell.access.mcp: tools act with\nthe user's permissions
+control.packs -> cell.workers.engine: verified rule packs
+control.flags -> cell.core
+cell -> control.obs: telemetry
+control.prov -> edge.router: tenant placement
