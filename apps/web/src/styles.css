@@ -117,7 +117,7 @@ span.chip:not(.MuiChip-root) { display: inline-flex; align-items: center; gap: 5
 /* ---------- conversations (helpdesk, assistant) ---------- */
 .chat { display: grid; gap: 12px; max-height: 440px; overflow: auto; padding: 4px 2px; }
 .chatbox { border-radius: var(--sp-radius); background: var(--sp-paper); box-shadow: var(--sp-shadow-card); display: flex; flex-direction: column; height: min(600px, 66vh); overflow: hidden; }
-.chat-body { flex: 1; overflow: auto; padding: 24px; display: grid; gap: 14px; align-content: start; }
+.chat-body { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 24px; display: grid; gap: 14px; align-content: start; }
 .chat-input { display: flex; gap: 10px; padding: 16px 20px; border-top: 1px solid var(--sp-divider); align-items: center; }
 .msg { max-width: 78%; padding: 11px 16px; border-radius: 4px 16px 16px 16px; background: var(--sp-grey-100); white-space: pre-wrap; color: var(--sp-text); }
 .msg.user { justify-self: end; background: var(--sp-primary); color: #fff; border-radius: 16px 4px 16px 16px; }

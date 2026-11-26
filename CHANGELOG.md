@@ -6,6 +6,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 Each entry says **what** changed, **where** (file path) and, for UI work, **which Spike Admin source** it was modelled on, so a future developer can trace any visual decision back to its reference.
 
 ## [Unreleased]
+### Fixed
+- **Assistant chat box** (`pages/Assistant.tsx`, `styles.css`): sending a message no longer scrolls the whole page down. The auto-scroll used `scrollIntoView`, which also scrolled the window; it now scrolls only the message list (`.chat-body`). The box height fits the space left on screen, recalculated on resize with a 340px minimum, so the input row always stays visible. `.chat-body` has `min-height: 0` and `overscroll-behavior: contain`.
 ## [0.2.1] - 2026-11-27 - UI review fixes (calendar, activity filter, theme animation, spacing)
 Front-end only (`apps/web`). No change to the API, engine, routes, permissions or calculations.
 ### Added
