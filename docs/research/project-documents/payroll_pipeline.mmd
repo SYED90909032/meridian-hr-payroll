@@ -1,0 +1,14 @@
+flowchart LR
+    A["Continuous inputs<br/>time ledger, leave, comp changes,<br/>variable pay, expenses"] --> B["Continuous preview calc<br/>recomputed on every change"]
+    B --> C["Cut-off and input freeze<br/>immutable snapshot + hash"]
+    C --> D["Deterministic calc<br/>Rust engine + versioned country pack"]
+    D --> E{"Validation gates<br/>rules + variance vs last period<br/>+ AI anomaly flags"}
+    E -- "exceptions" --> F["Exception queue<br/>fix input, re-run only affected people"]
+    F --> D
+    E -- "clean" --> G["Maker-checker approval<br/>two-person rule, signed"]
+    G --> H["Lock period<br/>results become immutable"]
+    H --> I["Money movement<br/>bank files or APIs, idempotency keys,<br/>WPS / SIF where required"]
+    H --> J["Statutory outputs<br/>returns, challans, e-filing"]
+    H --> K["GL journal to ERP<br/>payslips to employees"]
+    I --> L["Reconciliation<br/>bank status vs expected"]
+    H --> M["Continuity kit<br/>last approved bank file + register<br/>kept off-platform"]

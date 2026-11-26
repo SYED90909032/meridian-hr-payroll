@@ -1,0 +1,23 @@
+sequenceDiagram
+    autonumber
+    actor U as Manager
+    participant C as AI client (in-app or external MCP client)
+    participant M as MCP server
+    participant P as Policy engine (ReBAC + field rules)
+    participant D as Domain command API
+    participant A as Approval inbox
+    participant L as Audit ledger
+    U->>C: "Approve Priya's leave and move her shift to Friday"
+    C->>M: OAuth 2.1 token (user-delegated, scoped: time.write)
+    M->>P: check(agent on behalf of U, leave:123, approve)
+    P-->>M: allowed (U manages Priya)
+    M->>D: approveLeave(123) with idempotency key
+    D-->>M: ok, leave approved
+    M->>P: check(agent on behalf of U, shift:456, update)
+    P-->>M: allowed but risky (creates overtime)
+    M->>A: create pending action with diff + reason
+    A-->>U: confirm card: "+2h overtime, cost 1,450 INR"
+    U->>A: confirm
+    A->>D: updateShift(456)
+    D->>L: append events (actor = agent, on behalf of = U, prompt hash)
+    M-->>C: structured result + links

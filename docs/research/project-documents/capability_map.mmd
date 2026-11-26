@@ -1,0 +1,25 @@
+flowchart BT
+    K["kernel<br/>tenancy, identity, authz,<br/>audit, metadata, i18n"]
+    P["people-core<br/>person, employment, position,<br/>org, documents"]
+    W["flow<br/>journeys, approvals inbox,<br/>policies, notifications"]
+    T["time<br/>punches, leave, shifts,<br/>timesheets, overtime"]
+    Y["pay<br/>payroll engine, country packs,<br/>payments, expenses, contractors"]
+    TL["talent<br/>hiring, goals, reviews,<br/>feedback, skills, learning links"]
+    R["rewards<br/>comp cycles, bands,<br/>benefits, total rewards"]
+    S["service<br/>HR helpdesk, knowledge,<br/>policies, letters"]
+    I["insight<br/>metrics layer, reports,<br/>dashboards, planning"]
+    X["platform<br/>API, webhooks, SCIM,<br/>plugins, marketplace"]
+    AI["intelligence<br/>assistant, agents, MCP,<br/>anomaly detection"]
+    P --> K
+    W --> K
+    W --> P
+    T --> W
+    Y --> T
+    TL --> W
+    R --> Y
+    R --> TL
+    S --> W
+    I --> P
+    X --> K
+    AI --> X
+    AI --> I
