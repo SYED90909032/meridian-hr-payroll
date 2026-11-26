@@ -1,7 +1,7 @@
 # ADR-020: UI: classic clean white, Astryx-inspired, own tokens
 
 Blueprint ref: UI
-Status: Accepted
+Status: Superseded by ADR-022 (Spike Admin design system, 2026-11-27)
 
 ## Decision
 React 19 + Vite, own CSS tokens and thin components. No Beta design-system dependency.

@@ -26,7 +26,7 @@ export default function Leave() {
       {!hasEmp && <Banner tone="info">Your login is not linked to an employee record, so you cannot request leave. You can still review team requests and the calendar.</Banner>}
       {bal.data && bal.data.balances.length > 0 && (
         <div className="grid g4" style={{ marginBottom: 16 }}>
-          {bal.data.balances.map((b) => <Stat key={b.leave_type_id} k={b.name} v={<>{days(b.balance_x1000)} <span className="faint" style={{ fontSize: 13 }}>days</span></>} s={b.pending_x1000 ? `${days(b.pending_x1000)} pending approval` : b.paid ? 'Paid' : 'Unpaid'} />)}
+          {bal.data.balances.map((b) => <Stat key={b.leave_type_id} k={b.name} icon="solar:calendar-line-duotone" color={b.paid ? 'primary' : 'secondary'} v={<>{days(b.balance_x1000)} <span className="faint" style={{ fontSize: 13 }}>days</span></>} s={b.pending_x1000 ? `${days(b.pending_x1000)} pending approval` : b.paid ? 'Paid' : 'Unpaid'} />)}
         </div>
       )}
       <Tabs tabs={tabs} value={tab} onChange={setTab} />

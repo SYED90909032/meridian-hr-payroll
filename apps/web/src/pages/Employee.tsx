@@ -2,7 +2,7 @@ import { useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { ApiError, download, errMsg, fmtDate, fmtDateTime, fromMinor, get, money, patch, post, put, toMinor } from '../api';
 import { useSession } from '../session';
-import { Avatar, Banner, Card, ConfirmModal, Chip, Empty, ErrorBox, Field, FormModal, Loading, PageHead, StatusChip, Table, Tabs, useAsync, useToast } from '../ui';
+import { Avatar, AvatarPicker, Banner, Card, ConfirmModal, Chip, Empty, ErrorBox, Field, FormModal, Loading, PageHead, StatusChip, Table, Tabs, useAsync, useToast } from '../ui';
 import type { EmployeeRow } from './People';
 
 type Tab = 'overview' | 'pay' | 'identity' | 'documents' | 'history';
@@ -14,7 +14,7 @@ export default function Employee() {
   const nav = useNavigate();
   const toast = useToast();
   const [tab, setTab] = useState<Tab>('overview');
-  const [modal, setModal] = useState<null | 'edit' | 'terminate' | 'erase'>(null);
+  const [modal, setModal] = useState<null | 'edit' | 'terminate' | 'erase' | 'picture'>(null);
   const d = useAsync(() => get<Detail>(`/people/employees/${id}`), [id]);
   if (d.loading && !d.data) return <Loading />;
   if (d.error) return <ErrorBox error={d.error} retry={d.reload} />;
@@ -28,13 +28,24 @@ export default function Employee() {
   if (d.data!.events.length) tabs.push(['history', 'History']);
   return (
     <>
-      <PageHead title={full} sub={<span><span className="mono">{e.employee_no}</span> · {e.job_title ?? 'No title'} · <StatusChip status={e.status} /></span>}>
+      <PageHead title={full} avatar={
+        <span style={{ position: 'relative', display: 'inline-flex' }}>
+          <Avatar name={full} size={64} />
+          {(self || can('people.write')) && <button type="button" className="btn primary sm no-print" aria-label="Change profile picture" title="Change picture" onClick={() => setModal('picture')} style={{ position: 'absolute', right: -6, bottom: -6, width: 28, height: 28, padding: 0, fontSize: 13 }}>✎</button>}
+        </span>
+      } sub={<span><span className="mono">{e.employee_no}</span> · {e.job_title ?? 'No title'} · <StatusChip status={e.status} /></span>}>
         <Link className="btn" to="/people">Back</Link>
         {can('people.write') && e.status !== 'terminated' && <button className="btn" onClick={() => setModal('edit')}>Edit</button>}
         {can('people.write') && e.status !== 'terminated' && !self && <button className="btn danger" onClick={() => setModal('terminate')}>Terminate</button>}
         {can('settings.manage') && e.status === 'terminated' && <button className="btn danger" onClick={() => setModal('erase')}>Erase personal data</button>}
       </PageHead>
       <Tabs tabs={tabs} value={tab} onChange={setTab} />
+      {modal === 'picture' && (
+        <FormModal title="Profile picture" submit="Done" onClose={() => setModal(null)} onSubmit={async () => {}}>
+          <p className="muted" style={{ marginBottom: 16 }}>Choose the picture shown next to {full}. It is saved on this device.</p>
+          <AvatarPicker name={full} />
+        </FormModal>
+      )}
       {tab === 'overview' && (
         <div className="grid g-main">
           <Card title="Details">

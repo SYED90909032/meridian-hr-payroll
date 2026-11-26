@@ -74,16 +74,16 @@ export default function PayRun() {
 
       <div className="steps" aria-label="Progress">
         {STEPS.map((k, i) => (
-          <div key={k} className={'step' + (i < idx ? ' done' : '') + (i === idx ? ' now' : '')}>{i < idx ? '✓ ' : ''}{LABEL[k]}</div>
+          <div key={k} className={'step' + (i < idx ? ' done' : '') + (i === idx ? ' now' : '')}>{LABEL[k]}</div>
         ))}
       </div>
 
       {idx >= 2 && (
         <div className="grid g4" style={{ margin: '16px 0' }}>
-          <Stat k="People paid" v={totals.employees} s={totals.excluded ? `${totals.excluded} excluded` : undefined} />
-          <Stat k="Gross" v={money(totals.gross_minor, cur)} />
-          <Stat k="Net pay" v={money(totals.net_minor, cur)} s={`Deductions ${money(totals.deductions_minor, cur)}`} />
-          <Stat k="Employer cost" v={money(totals.employer_cost_minor, cur)} />
+          <Stat k="People paid" icon="solar:users-group-rounded-line-duotone" color="primary" v={totals.employees} s={totals.excluded ? `${totals.excluded} excluded` : undefined} />
+          <Stat k="Gross" icon="solar:money-bag-line-duotone" color="info" v={money(totals.gross_minor, cur)} />
+          <Stat k="Net pay" icon="solar:wallet-money-line-duotone" color="success" v={money(totals.net_minor, cur)} s={`Deductions ${money(totals.deductions_minor, cur)}`} />
+          <Stat k="Employer cost" icon="solar:buildings-2-line-duotone" color="warning" v={money(totals.employer_cost_minor, cur)} />
         </div>
       )}
 
