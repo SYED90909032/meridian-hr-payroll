@@ -174,16 +174,18 @@ export function Stat({ k, v, s, icon, color }: { k: string; v: ReactNode; s?: Re
   );
 }
 
-export const Chip = ({ tone = '', children }: { tone?: Tone; children: ReactNode }) => {
+/** Tinted label. Text is shown exactly as given (event names like `employee.created` must keep
+ *  their case); StatusChip below sentence-cases its own status words. */
+export const Chip = ({ tone = '', children, capitalize = false }: { tone?: Tone; children: ReactNode; capitalize?: boolean }) => {
   const k = toneKey(tone);
-  return <MuiChip size="small" className="chip" label={children} sx={{ height: 24, px: 0.25, fontSize: '0.75rem', fontWeight: 600, bgcolor: `${k}.light`, color: (t) => t.tokens.onTint[k], textTransform: 'capitalize', verticalAlign: 'middle', borderRadius: '6px' }} />;
+  return <MuiChip size="small" className="chip" label={children} sx={{ height: 24, px: 0.25, fontSize: '0.75rem', fontWeight: 600, bgcolor: `${k}.light`, color: (t) => t.tokens.onTint[k], textTransform: capitalize ? 'capitalize' : 'none', verticalAlign: 'middle', borderRadius: '6px' }} />;
 };
 const STATUS_TONE: Record<string, Tone> = {
   active: 'ok', approved: 'ok', published: 'ok', paid: 'ok', finalised: 'ok', delivered: 'ok', resolved: 'ok', present: 'ok', ok: 'ok', accepted: 'ok',
   pending: 'warn', in_review: 'warn', calculated: 'info', locked: 'info', draft: '', on_leave: 'info', open: 'info', in_progress: 'info', incomplete: 'warn', late: 'warn', review: 'warn', waived: 'warn',
   rejected: 'bad', terminated: 'bad', failed: 'bad', cancelled: '', voided: '', absent: 'bad', blocking: 'bad', suspended: 'bad', closed: '', reversed: 'bad', released: 'info', payment_released: 'info',
 };
-export const StatusChip = ({ status }: { status: string }) => <Chip tone={STATUS_TONE[status] ?? ''}>{status.replace(/_/g, ' ')}</Chip>;
+export const StatusChip = ({ status }: { status: string }) => <Chip capitalize tone={STATUS_TONE[status] ?? ''}>{status.replace(/_/g, ' ')}</Chip>;
 
 /* ---------- avatars ---------- */
 const AVATAR_KEYS: PaletteKey[] = ['primary', 'success', 'warning', 'error', 'info', 'secondary'];

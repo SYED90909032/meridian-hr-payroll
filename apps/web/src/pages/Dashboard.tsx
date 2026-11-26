@@ -89,7 +89,7 @@ export default function Dashboard() {
           {can('insight.read') && (
             <Card title="Headcount, last 12 months" actions={months.length ? <Chip tone="info">{months[months.length - 1]!.headcount} now</Chip> : undefined}>
               {trend.loading ? <Loading /> : months.length ? (
-                <Box role="img" aria-label="Headcount by month" sx={{ mx: -1.5, mb: -1.5 }}>
+                <Box role="img" aria-label="Headcount by month" sx={{ mx: -1.5, mb: -1.5, minWidth: 160 /* keeps the plot area positive before the container is measured */ }}>
                   <BarChart height={smDown ? 220 : 280} hideLegend borderRadius={6} skipAnimation
                     margin={{ top: 10, right: 10, bottom: 0, left: 0 }}
                     xAxis={[{ scaleType: 'band', data: months.map((m) => monthLabel(m.month)), categoryGapRatio: 0.45, disableLine: true, disableTicks: true, tickLabelStyle: tickText, tickLabelInterval: smDown ? (_v: string, i: number) => i % 3 === 0 : 'auto' }]}

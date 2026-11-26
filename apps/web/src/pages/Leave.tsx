@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { days, fmtDate, get, post } from '../api';
 import { useMe, useSession } from '../session';
 import { Banner, Card, ConfirmModal, Empty, ErrorBox, Field, FormModal, Loading, PageHead, Stat, StatusChip, Table, Tabs, useAsync, useToast } from '../ui';
+import { DateInput } from '../DateInput';
 
 interface LType { id: string; code: string; name: string; paid: boolean; special: boolean; allow_negative: boolean; annual_days_x1000: number }
 interface Bal { leave_type_id: string; code: string; name: string; paid: boolean; special: boolean; balance_x1000: number; pending_x1000: number }
@@ -50,8 +51,8 @@ function RequestForm({ types, balances, onClose, onDone }: { types: LType[]; bal
       <Field label="Type"><select className="input" required value={f.leaveTypeId} onChange={(e) => setF({ ...f, leaveTypeId: e.target.value })}><option value="">Choose…</option>{types.map((t) => <option key={t.id} value={t.id}>{t.name}{t.paid ? '' : ' (unpaid)'}</option>)}</select></Field>
       {bal && <div className="faint" style={{ margin: '-6px 0 10px' }}>Balance {days(bal.balance_x1000)} days{bal.pending_x1000 ? `, ${days(bal.pending_x1000)} already pending` : ''}</div>}
       <div className="grid g2">
-        <Field label="From"><input className="input" type="date" required value={f.startDate} onChange={(e) => setF({ ...f, startDate: e.target.value, endDate: f.endDate < e.target.value ? e.target.value : f.endDate })} /></Field>
-        <Field label="To"><input className="input" type="date" required min={f.startDate} value={f.endDate} onChange={(e) => setF({ ...f, endDate: e.target.value })} /></Field>
+        <Field label="From"><DateInput type="date" required value={f.startDate} onChange={(e) => setF({ ...f, startDate: e.target.value, endDate: f.endDate < e.target.value ? e.target.value : f.endDate })} /></Field>
+        <Field label="To"><DateInput type="date" required min={f.startDate} value={f.endDate} onChange={(e) => setF({ ...f, endDate: e.target.value })} /></Field>
       </div>
       <label className="check" style={{ marginBottom: 12 }}><input type="checkbox" disabled={!!f.endDate && f.endDate !== f.startDate} checked={f.half} onChange={(e) => setF({ ...f, half: e.target.checked })} /> Half day (single date only)</label>
       <Field label="Reason (optional)" hint="Private. Your manager sees it only when deciding; HR admins do not by default."><textarea className="input" maxLength={500} value={f.reason} onChange={(e) => setF({ ...f, reason: e.target.value })} /></Field>
@@ -96,7 +97,7 @@ function CalendarView() {
   const last = new Date(Date.UTC(+month.slice(0, 4), +month.slice(5, 7), 0)).toISOString().slice(0, 10);
   const c = useAsync(() => get<{ leave: Array<{ employee_id: string; first_name?: string; last_name?: string; start_date: string; end_date: string; type_name?: string; special?: boolean }> }>(`/leave/calendar?from=${first}&to=${last}`), [month]);
   return (
-    <Card title="Who is away" actions={<input className="input" type="month" value={month} onChange={(e) => e.target.value && setMonth(e.target.value)} aria-label="Month" />} flush>
+    <Card title="Who is away" actions={<DateInput type="month" value={month} onChange={(e) => e.target.value && setMonth(e.target.value)} aria-label="Month" />} flush>
       {c.error ? <ErrorBox error={c.error} retry={c.reload} /> : c.loading && !c.data ? <Loading /> : c.data!.leave.length ? (
         <Table head={['Person', 'Dates', 'Type']}>
           {c.data!.leave.map((x, i) => <tr key={i}><td>{x.first_name ? `${x.first_name} ${x.last_name}` : 'Colleague'}</td><td>{fmtDate(x.start_date)}{x.end_date !== x.start_date && ` – ${fmtDate(x.end_date)}`}</td><td>{x.type_name ?? 'Away'}</td></tr>)}

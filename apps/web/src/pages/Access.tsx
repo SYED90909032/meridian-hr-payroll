@@ -30,7 +30,7 @@ export default function Access() {
           <Table head={['Person', 'Roles', 'Linked employee', 'Status', '']}>
             {m.data!.members.map((x) => (
               <tr key={x.user_id}><td><strong>{x.display_name}</strong><div className="faint">{x.email}</div></td>
-                <td>{x.roles.length ? x.roles.map((r) => <Chip key={r.role + r.scope}>{r.role.replace('_', ' ')}{r.scope !== 'tenant' ? ` · ${r.scope}` : ''}</Chip>) : <span className="faint">employee self-service</span>}</td>
+                <td className="chips-cell">{x.roles.length ? x.roles.map((r) => <Chip key={r.role + r.scope}>{r.role.replace('_', ' ')}{r.scope !== 'tenant' ? ` · ${r.scope}` : ''}</Chip>) : <span className="faint">employee self-service</span>}</td>
                 <td>{nameOf(x.employee_id) ?? <span className="faint">—</span>}</td><td><Chip tone={x.status === 'active' ? 'ok' : 'bad'}>{x.status}</Chip></td>
                 <td className="right nowrap"><button className="btn sm ghost" onClick={() => { setEdit(x); setRolesDraft(Array.from(new Set(x.roles.map((r) => r.role)))); }}>Roles</button><button className="btn sm ghost" onClick={() => setSusp(x)}>{x.status === 'active' ? 'Suspend' : 'Reactivate'}</button></td></tr>
             ))}

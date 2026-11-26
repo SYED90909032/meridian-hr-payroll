@@ -2,10 +2,14 @@
  * ThemeRoot: MUI ThemeProvider + CssBaseline + colour-mode state (light / dark, persisted).
  * It also publishes the Spike tokens as CSS variables (--sp-*) so the plain CSS classes in
  * styles.css (btn, input, table, chip …) follow the theme and dark mode exactly like MUI components.
+ * Switching mode runs the organic reveal from themeReveal.ts; the state update is flushed
+ * synchronously inside the View Transition so the browser captures the new colours.
  */
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { flushSync } from 'react-dom';
 import { CssBaseline, GlobalStyles, ThemeProvider } from '@mui/material';
 import { createAppTheme, type ThemeMode } from './createAppTheme';
+import { revealThemeChange } from './themeReveal';
 import { darkPalette, lightPalette, shadowTokens, FONT_STACK, MONO_STACK } from './tokens';
 
 const KEY = 'meridian:color-mode';
@@ -43,7 +47,9 @@ export function ThemeRoot({ children }: { children: ReactNode }) {
     return 'light';
   });
   useEffect(() => { try { localStorage.setItem(KEY, mode); } catch { /* ignore */ } }, [mode]);
-  const toggleMode = useCallback(() => setMode((m) => (m === 'dark' ? 'light' : 'dark')), []);
+  const toggleMode = useCallback(() => {
+    revealThemeChange(() => flushSync(() => setMode((m) => (m === 'dark' ? 'light' : 'dark'))));
+  }, []);
   const theme = useMemo(() => createAppTheme(mode), [mode]);
   return (
     <Ctx.Provider value={{ mode, toggleMode }}>

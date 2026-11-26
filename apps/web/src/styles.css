@@ -62,7 +62,7 @@ textarea.input { height: auto; min-height: 96px; padding: 11px 14px; resize: ver
 .input[disabled] { background: var(--sp-grey-100); cursor: not-allowed; }
 input[type='checkbox'], input[type='radio'] { width: 17px; height: 17px; accent-color: var(--sp-primary); cursor: pointer; flex: none; }
 input[type='file'].input { padding: 9px 12px; height: auto; }
-.row { display: flex; gap: 16px; } .row > * { flex: 1; min-width: 0; }
+.row { display: flex; gap: 16px; align-items: flex-start; } .row > * { flex: 1; min-width: 0; }
 @media (max-width: 600px) { .row { flex-direction: column; gap: 0; } }
 .check { display: flex; align-items: center; gap: 10px; cursor: pointer; }
 .search { max-width: 300px; }
@@ -138,6 +138,46 @@ span.chip:not(.MuiChip-root) { display: inline-flex; align-items: center; gap: 5
 
 /* ---------- payslip print ---------- */
 .payslip { max-width: 820px; }
+/* Hand-written card bodies (<div className="card-b"> inside a flush Card) get the same 24px
+   padding the Card component applies to its own body. */
+.card-b { padding: 24px; }
+@media (max-width: 600px) { .card-b { padding: 18px; } }
+/* Body text followed directly by an action, banner or chip (e.g. Payroll > Controls) needs
+   breathing room, since paragraphs carry no bottom margin in this theme. */
+p + .btn, p + .banner, p + .chip, .banner + .btn { margin-top: 12px; }
+/* Table cells holding a wrap of chips keep a readable width when the table scrolls on phones. */
+.chips-cell { min-width: 240px; }
+
+/* A Banner (MUI Alert) placed straight after a card, grid or table must not touch it. */
+.card + .MuiAlert-root, .MuiCard-root + .MuiAlert-root, .grid + .MuiAlert-root, .table-wrap + .MuiAlert-root { margin-top: 20px; }
+
+/* Chips sitting side by side (roles, webhook events) need breathing room, also when they wrap. */
+.chip + .chip { margin-left: 6px; }
+td .chip, td .chip + .chip { margin: 2px 6px 2px 0; } /* in tables chips wrap, so space on the right keeps rows aligned */
+
+/* DateInput inside toolbars keeps a sensible width instead of shrinking to its text. */
+.inline .date-input, .actions .date-input { width: auto; }
+.inline .date-input > .input, .actions .date-input > .input { width: 100%; }
+
+/* Audit log filter bar: select + search side by side, stacked full-width on phones. */
+.audit-filters select.input { width: 220px; }
+.audit-filters input.input { width: 240px; }
+@media (max-width: 600px) {
+  .audit-filters, .audit-filters select.input, .audit-filters input.input { width: 100%; }
+}
+
+/* ---------- Theme reveal (see src/theme/themeReveal.ts) ----------
+   During a colour-mode switch the browser shows the old page as a still snapshot and reveals
+   the new page through a growing organic clip-path. The long no-op animation keeps the view
+   transition alive until the script calls skipTransition() at the end of its own easing. */
+:root[data-theme-reveal]::view-transition { pointer-events: none; }
+:root[data-theme-reveal]::view-transition-group(root) { animation: none; }
+:root[data-theme-reveal]::view-transition-old(root),
+:root[data-theme-reveal]::view-transition-new(root) { animation: none; mix-blend-mode: normal; opacity: 1; }
+:root[data-theme-reveal]::view-transition-old(root) { z-index: 1; }
+:root[data-theme-reveal]::view-transition-new(root) { z-index: 2; clip-path: var(--theme-reveal-clip); animation: theme-reveal-hold 8s linear; }
+@keyframes theme-reveal-hold { from { opacity: 1; } to { opacity: 1; } }
+
 @media print {
   .no-print, .banner, .MuiAlert-root, header, aside, nav { display: none !important; }
   body { background: #fff; }

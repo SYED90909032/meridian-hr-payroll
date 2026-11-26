@@ -6,6 +6,24 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 Each entry says **what** changed, **where** (file path) and, for UI work, **which Spike Admin source** it was modelled on, so a future developer can trace any visual decision back to its reference.
 
 ## [Unreleased]
+## [0.2.1] - 2026-11-27 - UI review fixes (calendar, activity filter, theme animation, spacing)
+Front-end only (`apps/web`). No change to the API, engine, routes, permissions or calculations.
+### Added
+- **Animated dark/light switch**: `src/theme/themeReveal.ts`. It ports the user-supplied `applyTheme` / `themeRevealPath` (cojeev ThemeToggle) without the `motion` dependency. The new theme spreads out from a random edge zone as a 12-lobe organic blob, driven by the View Transitions API: 1.2-1.38 s, `cubic-bezier(.42,0,.18,1)`. It switches instantly if the browser lacks the API or the user prefers reduced motion. Scrolling or resizing ends it early. `ThemeRoot.toggleMode` wraps the state change in `flushSync` so the snapshot is taken after React commits.
+- **Sun/moon toggle glyph**: `src/theme/ThemeToggleIcon.tsx`. It morphs between sun and moon with staggered rays. The header button is now `role="switch"` with the label "Dark mode".
+- **Calendar date picker**: `src/DateInput.tsx`. A Spike-styled popover calendar with day, month and year views, Monday-first weeks, Today/Clear and min/max limits. It is fully keyboard-driven (arrows, PgUp/PgDn, Home/End, Enter, Esc). It replaces the native `date`, `month` and `datetime-local` inputs in Employee, Leave, Payroll, People and Time. Values keep the exact native string format (`YYYY-MM-DD`, `YYYY-MM`, `YYYY-MM-DDTHH:mm`), so API payloads are unchanged. A hidden native input still enforces `required`. Time-only fields stay native.
+### Fixed
+- **Activity log filter** (`pages/Audit.tsx`). The free-text action-prefix box looked like a broken filter. It is now an "Activity type" select grouped by area, mapped to the same API `action` prefixes, and it applies immediately. A search box narrows the loaded rows by who, action or subject. Clear resets both.
+- **Spacing** (`styles.css`):
+  - Banners no longer touch the card above them (Leave team requests, Webhooks).
+  - Hand-written `.card-b` bodies get the card padding, which fixes the clipped "L0 means unreviewed" footnote in Payroll Controls.
+  - Paragraphs followed by a button, banner or chip get 12px of space.
+  - Form rows align to the top, which fixes the misaligned Type/Mode fields in "Start a pay run".
+- **Chips** (`ui.tsx`, `styles.css`):
+  - Adjacent chips get a gap (Access roles, webhook events).
+  - `Chip` no longer capitalises text by default, so identifiers such as `employee.created` show as written. `StatusChip` opts in through `capitalize`.
+  - The Access roles cell keeps a 240px minimum width on phones.
+- **Dashboard chart** (`pages/Dashboard.tsx`): the headcount chart has a minimum width so it never draws a negative-width `<rect>` before it is measured.
 
 ## [0.2.0] - 2026-11-27 - Spike Admin UI redesign
 

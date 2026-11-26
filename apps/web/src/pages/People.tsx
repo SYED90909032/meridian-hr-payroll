@@ -4,6 +4,7 @@ import { get, post, fmtDate } from '../api';
 import { useSession } from '../session';
 import { setAvatar } from '../avatars';
 import { Avatar, AvatarPicker, Card, Empty, ErrorBox, Field, FormModal, Loading, PageHead, StatusChip, Table, useAsync, useToast } from '../ui';
+import { DateInput } from '../DateInput';
 
 export interface EmployeeRow {
   id: string; employee_no: string; first_name: string; last_name: string; work_email: string | null; org_unit_id: string | null; org_unit_name: string | null;
@@ -71,7 +72,7 @@ function AddPerson({ units, people, onClose, onDone }: { units: Array<{ id: stri
         <Field label="Manager"><select className="input" value={f.managerId} onChange={set('managerId')}><option value="">None</option>{people.map((p) => <option key={p.id} value={p.id}>{p.first_name} {p.last_name}</option>)}</select></Field>
       </div>
       <div className="row">
-        <Field label="Start date"><input className="input" type="date" value={f.hireDate} onChange={set('hireDate')} required /></Field>
+        <Field label="Start date"><DateInput type="date" value={f.hireDate} onChange={set('hireDate')} required /></Field>
         <Field label="Type"><select className="input" value={f.employmentType} onChange={set('employmentType')}><option value="full_time">Full time</option><option value="part_time">Part time</option><option value="contractor">Contractor (not paid through payroll)</option></select></Field>
       </div>
       <label className="check"><input type="checkbox" checked={f.isUaeNational} onChange={set('isUaeNational')} /> UAE national (pension contributions apply)</label>

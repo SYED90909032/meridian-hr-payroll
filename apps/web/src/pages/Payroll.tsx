@@ -3,6 +3,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { del, fmtDate, get, money, post, toMinor } from '../api';
 import { useSession } from '../session';
 import { Banner, Card, Chip, ConfirmModal, Empty, ErrorBox, Field, FormModal, Loading, PageHead, StatusChip, Table, Tabs, useAsync, useToast } from '../ui';
+import { DateInput } from '../DateInput';
 
 export interface RunRow { id: string; pay_group_name: string; period_start: string; period_end: string; run_type: string; mode: string; status: string; pack_id: string; pack_version: string }
 interface Group { id: string; name: string; pack_id: string; pay_day: number; employer_id?: string | null }
@@ -65,8 +66,8 @@ function Runs({ canPrepare }: { canPrepare: boolean }) {
         }}>
           <Field label="Pay group"><select className="input" required value={f.payGroupId} onChange={(e) => setF({ ...f, payGroupId: e.target.value })}><option value="">Choose…</option>{groups.data?.groups.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}</select></Field>
           <div className="grid g2">
-            <Field label="Period start"><input className="input" type="date" required value={f.periodStart} onChange={(e) => setF({ ...f, periodStart: e.target.value })} /></Field>
-            <Field label="Period end"><input className="input" type="date" required min={f.periodStart} value={f.periodEnd} onChange={(e) => setF({ ...f, periodEnd: e.target.value })} /></Field>
+            <Field label="Period start"><DateInput type="date" required value={f.periodStart} onChange={(e) => setF({ ...f, periodStart: e.target.value })} /></Field>
+            <Field label="Period end"><DateInput type="date" required min={f.periodStart} value={f.periodEnd} onChange={(e) => setF({ ...f, periodEnd: e.target.value })} /></Field>
             <Field label="Type"><select className="input" value={f.runType} onChange={(e) => setF({ ...f, runType: e.target.value })}><option value="regular">Regular</option><option value="off_cycle">Off-cycle</option><option value="final">Final settlement</option></select></Field>
             <Field label="Mode" hint="Sandbox never pays. Live needs a reviewed rule pack."><select className="input" value={f.mode} onChange={(e) => setF({ ...f, mode: e.target.value })}><option value="sandbox">Sandbox</option><option value="parallel">Parallel</option><option value="live">Live</option></select></Field>
           </div>
@@ -138,7 +139,7 @@ function Adjustments({ canPrepare }: { canPrepare: boolean }) {
           <Field label="Person"><select className="input" required value={f.employeeId} onChange={(e) => setF({ ...f, employeeId: e.target.value })}><option value="">Choose…</option>{emps.data?.employees.map((e) => <option key={e.id} value={e.id}>{e.first_name} {e.last_name}</option>)}</select></Field>
           <div className="grid g2">
             <Field label="Kind"><select className="input" value={f.kind} onChange={(e) => setF({ ...f, kind: e.target.value })}><option value="earning">Earning</option><option value="deduction">Deduction</option></select></Field>
-            <Field label="Effective date"><input className="input" type="date" required value={f.effectiveDate} onChange={(e) => setF({ ...f, effectiveDate: e.target.value })} /></Field>
+            <Field label="Effective date"><DateInput type="date" required value={f.effectiveDate} onChange={(e) => setF({ ...f, effectiveDate: e.target.value })} /></Field>
             <Field label="Label"><input className="input" required maxLength={80} value={f.label} onChange={(e) => setF({ ...f, label: e.target.value })} /></Field>
             <Field label="Code" hint="Capitals, digits, underscore"><input className="input mono" required pattern="[A-Za-z][A-Za-z0-9_]{1,31}" value={f.code} onChange={(e) => setF({ ...f, code: e.target.value })} /></Field>
           </div>

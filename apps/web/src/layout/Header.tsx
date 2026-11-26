@@ -12,6 +12,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { get, post, fmtDate } from '../api';
 import { SolarIcon } from '../icons/SolarIcon';
 import { useColorMode } from '../theme/ThemeRoot';
+import { ThemeToggleIcon } from '../theme/ThemeToggleIcon';
 import { LAYOUT } from '../theme/tokens';
 import { Avatar, AvatarPicker, IconBox, Modal, useAsync } from '../ui';
 import type { NavSection } from './navConfig';
@@ -162,7 +163,7 @@ export function Header({ sections, onMenu, name, email, role, onSignOut }: Heade
         <QuickSearch sections={sections} />
         <Box sx={{ flex: 1 }} />
         <Tooltip title={mode === 'dark' ? 'Light mode' : 'Dark mode'}>
-          <IconButton sx={iconBtnSx} onClick={toggleMode} aria-label="Toggle dark mode"><SolarIcon icon={mode === 'dark' ? 'solar:sun-2-line-duotone' : 'solar:moon-line-duotone'} size={23} /></IconButton>
+          <IconButton sx={iconBtnSx} onClick={toggleMode} role="switch" aria-checked={mode === 'dark'} aria-label="Dark mode"><ThemeToggleIcon dark={mode === 'dark'} /></IconButton>
         </Tooltip>
         <Notifications />
         <Box sx={{ width: 4 }} />
