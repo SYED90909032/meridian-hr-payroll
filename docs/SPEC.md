@@ -22,7 +22,7 @@ Success looks like this:
 4. This build uses a local envelope-encryption KMS adapter (master key from the environment). A cloud KMS plugs in behind the same interface (D11 stays open).
 5. Auth is built on vetted primitives (Node scrypt, RFC 6238 TOTP) inside one identity module (D10). Passkeys, OIDC and the MCP OAuth server are staged.
 6. Cloudflare edge Workers, the Go biometric bridge, the Rust/WASM engine and mobile apps are staged, not built. The engine's input and output contracts are fixed now so the Rust version can replace the TypeScript one and must pass the same golden tests.
-7. UI is a React web app in the classic clean white style of Astryx (ADR-020).
+7. UI is a React web app styled with the Spike Admin design system on MUI v7, light and dark mode (ADR-022, supersedes ADR-020).
 
 ## 3. Commands
 

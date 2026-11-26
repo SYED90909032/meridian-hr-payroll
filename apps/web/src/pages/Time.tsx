@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { del, fmtDate, fmtDateTime, get, post, put } from '../api';
 import { useSession } from '../session';
 import { Banner, Card, Chip, ConfirmModal, Empty, ErrorBox, Field, FormModal, Loading, PageHead, StatusChip, Table, Tabs, useAsync, useToast } from '../ui';
+import { DateInput } from '../DateInput';
 
 interface Day { employee_id: string; first_name: string; last_name: string; employee_no: string; work_date: string; first_in: string | null; last_out: string | null; worked_minutes: number; late_minutes: number; overtime_minutes: number; overtime_special_minutes: number; status: string }
 interface Emp { id: string; first_name: string; last_name: string; employee_no: string }
@@ -45,8 +46,8 @@ function Attendance({ admin }: { admin: boolean }) {
   };
   return (
     <Card title="Daily attendance" actions={<div className="inline">
-      <input className="input" type="date" value={from} max={to} onChange={(e) => setFrom(e.target.value)} aria-label="From" />
-      <input className="input" type="date" value={to} min={from} onChange={(e) => setTo(e.target.value)} aria-label="To" />
+      <DateInput type="date" value={from} max={to} onChange={(e) => setFrom(e.target.value)} aria-label="From" />
+      <DateInput type="date" value={to} min={from} onChange={(e) => setTo(e.target.value)} aria-label="To" />
       {admin && <button className="btn" onClick={recompute} disabled={busy}>{busy ? 'Working…' : 'Recompute'}</button>}
     </div>} flush>
       {a.error ? <ErrorBox error={a.error} retry={a.reload} /> : a.loading && !a.data ? <Loading /> : a.data!.days.length ? (
@@ -87,7 +88,7 @@ function Punches({ admin }: { admin: boolean }) {
         <FormModal title="Add a manual punch" submit="Add punch" onClose={() => setAdd(false)} onSubmit={async () => { await post('/time/punches/manual', { ...f, eventTime: new Date(f.eventTime).toISOString() }); toast('Punch added and audited'); p.reload(); }}>
           <Field label="Person"><select className="input" required value={f.employeeId} onChange={(e) => setF({ ...f, employeeId: e.target.value })}><option value="">Choose…</option>{emps.data?.employees.map((e) => <option key={e.id} value={e.id}>{e.first_name} {e.last_name} ({e.employee_no})</option>)}</select></Field>
           <div className="grid g2">
-            <Field label="Date and time"><input className="input" type="datetime-local" required value={f.eventTime} onChange={(e) => setF({ ...f, eventTime: e.target.value })} /></Field>
+            <Field label="Date and time"><DateInput type="datetime-local" required value={f.eventTime} onChange={(e) => setF({ ...f, eventTime: e.target.value })} /></Field>
             <Field label="Direction"><select className="input" value={f.direction} onChange={(e) => setF({ ...f, direction: e.target.value })}><option value="in">In</option><option value="out">Out</option></select></Field>
           </div>
           <Field label="Reason" hint="Recorded in the audit log."><input className="input" required minLength={5} maxLength={300} value={f.reason} onChange={(e) => setF({ ...f, reason: e.target.value })} /></Field>
@@ -130,8 +131,8 @@ function Shifts() {
           <Field label="Person"><select className="input" required value={a.employeeId} onChange={(e) => setA({ ...a, employeeId: e.target.value })}><option value="">Choose…</option>{emps.data?.employees.map((e) => <option key={e.id} value={e.id}>{e.first_name} {e.last_name}</option>)}</select></Field>
           <Field label="Shift"><select className="input" required value={a.shiftId} onChange={(e) => setA({ ...a, shiftId: e.target.value })}><option value="">Choose…</option>{s.data?.shifts.map((e) => <option key={e.id} value={e.id}>{e.name}</option>)}</select></Field>
           <div className="grid g2">
-            <Field label="From"><input className="input" type="date" required value={a.from} onChange={(e) => setA({ ...a, from: e.target.value })} /></Field>
-            <Field label="Until (optional)"><input className="input" type="date" min={a.from} value={a.to} onChange={(e) => setA({ ...a, to: e.target.value })} /></Field>
+            <Field label="From"><DateInput type="date" required value={a.from} onChange={(e) => setA({ ...a, from: e.target.value })} /></Field>
+            <Field label="Until (optional)"><DateInput type="date" min={a.from} value={a.to} onChange={(e) => setA({ ...a, to: e.target.value })} /></Field>
           </div>
         </FormModal>
       )}
@@ -154,7 +155,7 @@ function Holidays() {
         ) : <Empty title={`No holidays for ${year}`} />}
       </Card>
       {add && <FormModal title="Add a holiday" onClose={() => setAdd(false)} onSubmit={async () => { await post('/time/holidays', f); toast('Holiday added'); h.reload(); }}>
-        <Field label="Date"><input className="input" type="date" required value={f.date} onChange={(e) => setF({ ...f, date: e.target.value })} /></Field>
+        <Field label="Date"><DateInput type="date" required value={f.date} onChange={(e) => setF({ ...f, date: e.target.value })} /></Field>
         <Field label="Name"><input className="input" required maxLength={100} value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} /></Field>
       </FormModal>}
       {rm && <ConfirmModal title="Remove holiday" confirm="Remove" danger body={`Remove ${fmtDate(rm)}? Attendance and overtime for that day will change when recomputed.`} onClose={() => setRm(null)} onConfirm={async () => { await del(`/time/holidays/${rm}`); toast('Removed'); h.reload(); }} />}

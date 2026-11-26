@@ -2,8 +2,9 @@ import { useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { ApiError, download, errMsg, fmtDate, fmtDateTime, fromMinor, get, money, patch, post, put, toMinor } from '../api';
 import { useSession } from '../session';
-import { Avatar, Banner, Card, ConfirmModal, Chip, Empty, ErrorBox, Field, FormModal, Loading, PageHead, StatusChip, Table, Tabs, useAsync, useToast } from '../ui';
+import { Avatar, AvatarPicker, Banner, Card, ConfirmModal, Chip, Empty, ErrorBox, Field, FormModal, Loading, PageHead, StatusChip, Table, Tabs, useAsync, useToast } from '../ui';
 import type { EmployeeRow } from './People';
+import { DateInput } from '../DateInput';
 
 type Tab = 'overview' | 'pay' | 'identity' | 'documents' | 'history';
 interface Detail { employee: EmployeeRow; events: Array<{ kind: string; effective_date: string | null; detail: Record<string, unknown>; created_at: string }>; directReports: Array<{ id: string; first_name: string; last_name: string; job_title: string | null }> }
@@ -14,7 +15,7 @@ export default function Employee() {
   const nav = useNavigate();
   const toast = useToast();
   const [tab, setTab] = useState<Tab>('overview');
-  const [modal, setModal] = useState<null | 'edit' | 'terminate' | 'erase'>(null);
+  const [modal, setModal] = useState<null | 'edit' | 'terminate' | 'erase' | 'picture'>(null);
   const d = useAsync(() => get<Detail>(`/people/employees/${id}`), [id]);
   if (d.loading && !d.data) return <Loading />;
   if (d.error) return <ErrorBox error={d.error} retry={d.reload} />;
@@ -28,13 +29,24 @@ export default function Employee() {
   if (d.data!.events.length) tabs.push(['history', 'History']);
   return (
     <>
-      <PageHead title={full} sub={<span><span className="mono">{e.employee_no}</span> · {e.job_title ?? 'No title'} · <StatusChip status={e.status} /></span>}>
+      <PageHead title={full} avatar={
+        <span style={{ position: 'relative', display: 'inline-flex' }}>
+          <Avatar name={full} size={64} />
+          {(self || can('people.write')) && <button type="button" className="btn primary sm no-print" aria-label="Change profile picture" title="Change picture" onClick={() => setModal('picture')} style={{ position: 'absolute', right: -6, bottom: -6, width: 28, height: 28, padding: 0, fontSize: 13 }}>✎</button>}
+        </span>
+      } sub={<span><span className="mono">{e.employee_no}</span> · {e.job_title ?? 'No title'} · <StatusChip status={e.status} /></span>}>
         <Link className="btn" to="/people">Back</Link>
         {can('people.write') && e.status !== 'terminated' && <button className="btn" onClick={() => setModal('edit')}>Edit</button>}
         {can('people.write') && e.status !== 'terminated' && !self && <button className="btn danger" onClick={() => setModal('terminate')}>Terminate</button>}
         {can('settings.manage') && e.status === 'terminated' && <button className="btn danger" onClick={() => setModal('erase')}>Erase personal data</button>}
       </PageHead>
       <Tabs tabs={tabs} value={tab} onChange={setTab} />
+      {modal === 'picture' && (
+        <FormModal title="Profile picture" submit="Done" onClose={() => setModal(null)} onSubmit={async () => {}}>
+          <p className="muted" style={{ marginBottom: 16 }}>Choose the picture shown next to {full}. It is saved on this device.</p>
+          <AvatarPicker name={full} />
+        </FormModal>
+      )}
       {tab === 'overview' && (
         <div className="grid g-main">
           <Card title="Details">
@@ -91,7 +103,7 @@ function TerminateModal({ id, onClose, onDone }: { id: string; onClose: () => vo
   return (
     <FormModal title="Terminate employment" submit="Terminate" danger onClose={onClose} onSubmit={async () => { await post(`/people/employees/${id}/terminate`, { terminationDate: date, reason: reason.trim() }); onDone(); }}>
       <Banner tone="warn">Their access ends immediately. Final pay is prepared as a separate final run; notice pay is entered as an adjustment.</Banner>
-      <Field label="Last day"><input className="input" type="date" value={date} onChange={(e) => setDate(e.target.value)} required /></Field>
+      <Field label="Last day"><DateInput type="date" value={date} onChange={(e) => setDate(e.target.value)} required /></Field>
       <Field label="Reason"><input className="input" value={reason} onChange={(e) => setReason(e.target.value)} required maxLength={300} /></Field>
     </FormModal>
   );
@@ -125,7 +137,7 @@ function CompModal({ id, onClose, onDone }: { id: string; onClose: () => void; o
       onDone();
     }}>
       <Banner tone="info">Amounts are monthly. A pay change takes effect on the date you choose; it cannot split a pay period that has already been locked.</Banner>
-      <Field label="Effective from"><input className="input" type="date" value={f.effectiveFrom} onChange={set('effectiveFrom')} required /></Field>
+      <Field label="Effective from"><DateInput type="date" value={f.effectiveFrom} onChange={set('effectiveFrom')} required /></Field>
       <div className="row"><Field label="Basic"><input className="input" inputMode="decimal" value={f.basic} onChange={set('basic')} required /></Field><Field label="Housing"><input className="input" inputMode="decimal" value={f.housing} onChange={set('housing')} /></Field></div>
       <div className="row"><Field label="Transport"><input className="input" inputMode="decimal" value={f.transport} onChange={set('transport')} /></Field><Field label="Other"><input className="input" inputMode="decimal" value={f.other} onChange={set('other')} /></Field></div>
       <Field label="Reason"><input className="input" value={f.reason} onChange={set('reason')} required maxLength={300} placeholder="Annual review, promotion, correction…" /></Field>
@@ -174,7 +186,7 @@ function IdModal({ id, onClose, onDone }: { id: string; onClose: () => void; onD
       <p className="muted" style={{ marginBottom: 12 }}>Only fields you fill in are changed. Values are encrypted with this person's own key.</p>
       <Field label="Emirates ID" hint="15 digits, starts with 784"><input className="input mono" value={f.nationalId} onChange={set('nationalId')} inputMode="numeric" /></Field>
       <Field label="WPS person code" hint="14 to 35 letters or digits (from MOHRE)"><input className="input mono" value={f.wpsUid} onChange={set('wpsUid')} /></Field>
-      <div className="row"><Field label="Date of birth"><input className="input" type="date" value={f.dob} onChange={set('dob')} /></Field><Field label="Phone"><input className="input" value={f.phone} onChange={set('phone')} /></Field></div>
+      <div className="row"><Field label="Date of birth"><DateInput type="date" value={f.dob} onChange={set('dob')} /></Field><Field label="Phone"><input className="input" value={f.phone} onChange={set('phone')} /></Field></div>
       <Field label="Address"><input className="input" value={f.address} onChange={set('address')} maxLength={300} /></Field>
     </FormModal>
   );

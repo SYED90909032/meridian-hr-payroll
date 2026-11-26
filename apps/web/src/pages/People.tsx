@@ -2,7 +2,9 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { get, post, fmtDate } from '../api';
 import { useSession } from '../session';
-import { Avatar, Card, Empty, ErrorBox, Field, FormModal, Loading, PageHead, StatusChip, Table, useAsync, useToast } from '../ui';
+import { setAvatar } from '../avatars';
+import { Avatar, AvatarPicker, Card, Empty, ErrorBox, Field, FormModal, Loading, PageHead, StatusChip, Table, useAsync, useToast } from '../ui';
+import { DateInput } from '../DateInput';
 
 export interface EmployeeRow {
   id: string; employee_no: string; first_name: string; last_name: string; work_email: string | null; org_unit_id: string | null; org_unit_name: string | null;
@@ -52,6 +54,7 @@ export default function People() {
 }
 
 function AddPerson({ units, people, onClose, onDone }: { units: Array<{ id: string; name: string }>; people: EmployeeRow[]; onClose: () => void; onDone: (id: string) => void }) {
+  const [pic, setPic] = useState<string | null>(null);
   const [f, setF] = useState({ firstName: '', lastName: '', workEmail: '', jobTitle: '', hireDate: new Date().toISOString().slice(0, 10), orgUnitId: '', managerId: '', employmentType: 'full_time', isUaeNational: false });
   const set = (k: string) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => setF((x) => ({ ...x, [k]: e.target.type === 'checkbox' ? (e.target as HTMLInputElement).checked : e.target.value }));
   return (
@@ -59,6 +62,7 @@ function AddPerson({ units, people, onClose, onDone }: { units: Array<{ id: stri
       const body: Record<string, unknown> = { firstName: f.firstName.trim(), lastName: f.lastName.trim(), hireDate: f.hireDate, employmentType: f.employmentType, isUaeNational: f.isUaeNational };
       if (f.workEmail) body.workEmail = f.workEmail.trim(); if (f.jobTitle) body.jobTitle = f.jobTitle.trim(); if (f.orgUnitId) body.orgUnitId = f.orgUnitId; if (f.managerId) body.managerId = f.managerId;
       const r = await post<{ id: string }>('/people/employees', body);
+      if (pic) setAvatar(`${f.firstName.trim()} ${f.lastName.trim()}`, pic); // device-local picture choice
       onDone(r.id);
     }}>
       <div className="row"><Field label="First name"><input className="input" value={f.firstName} onChange={set('firstName')} required maxLength={80} /></Field><Field label="Last name"><input className="input" value={f.lastName} onChange={set('lastName')} required maxLength={80} /></Field></div>
@@ -68,10 +72,14 @@ function AddPerson({ units, people, onClose, onDone }: { units: Array<{ id: stri
         <Field label="Manager"><select className="input" value={f.managerId} onChange={set('managerId')}><option value="">None</option>{people.map((p) => <option key={p.id} value={p.id}>{p.first_name} {p.last_name}</option>)}</select></Field>
       </div>
       <div className="row">
-        <Field label="Start date"><input className="input" type="date" value={f.hireDate} onChange={set('hireDate')} required /></Field>
+        <Field label="Start date"><DateInput type="date" value={f.hireDate} onChange={set('hireDate')} required /></Field>
         <Field label="Type"><select className="input" value={f.employmentType} onChange={set('employmentType')}><option value="full_time">Full time</option><option value="part_time">Part time</option><option value="contractor">Contractor (not paid through payroll)</option></select></Field>
       </div>
       <label className="check"><input type="checkbox" checked={f.isUaeNational} onChange={set('isUaeNational')} /> UAE national (pension contributions apply)</label>
+      <div className="field" style={{ marginTop: 18, marginBottom: 4 }}>
+        <span className="label">Profile picture <span className="faint" style={{ fontWeight: 400 }}>(optional)</span></span>
+        <AvatarPicker name={`${f.firstName} ${f.lastName}`.trim()} value={pic} onChange={setPic} size={46} />
+      </div>
     </FormModal>
   );
 }
