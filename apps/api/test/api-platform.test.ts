@@ -105,7 +105,7 @@ describe('API keys', () => {
     expect(made.status).toBe(201);
     const address = await b.app.listen({ port: 0, host: '127.0.0.1' });
     try {
-      const { ApiClient } = await import(new URL('../../../packages/sdk/dist/index.js', import.meta.url).href) as unknown as { ApiClient: new (options: { baseUrl: string; apiKey?: string }) => SdkClient };
+      const { ApiClient } = await import(new URL('../../../packages/sdk/src/index.ts', import.meta.url).href) as unknown as { ApiClient: new (options: { baseUrl: string; apiKey?: string }) => SdkClient };
       const sdk = new ApiClient({ baseUrl: address, apiKey: made.body.key });
       const result = await sdk.get<{ employees: unknown[] }>('/api/v1/people/employees');
       expect(Array.isArray(result.employees)).toBe(true);

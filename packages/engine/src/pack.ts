@@ -54,7 +54,7 @@ export interface CompiledPack {
 
 /** Input paths a pack rule may read. Kept in one place so the compiler and the calculator agree. */
 export const INPUT_PATHS = [
-  'period.days_in_period', 'period.days_payable',
+  'period.days_in_period', 'period.days_payable', 'period.is_full',
   'comp.basic', 'comp.housing', 'comp.transport', 'comp.other',
   'attendance.unpaid_leave_days_x1000', 'attendance.overtime_minutes', 'attendance.overtime_special_minutes',
   'statutory.contribution_salary_minor',

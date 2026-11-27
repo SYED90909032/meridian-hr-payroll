@@ -19,6 +19,8 @@ function inputVars(input: PayrollCalcInputV1): Map<string, bigint> {
   };
   set('period.days_in_period', input.period.days_in_period);
   set('period.days_payable', input.period.days_payable);
+  // 1 when the employee is payable for the whole period; then pay is the full amount (never 31/30 of a 31-day month).
+  set('period.is_full', input.period.days_payable >= input.period.days_in_period);
   set('comp.basic', input.comp.basic);
   set('comp.housing', input.comp.housing);
   set('comp.transport', input.comp.transport);

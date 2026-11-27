@@ -16,7 +16,14 @@ const NEEDS = 'needs_reviewer' as const;
 
 const fixedTotal = add(ref('comp.basic'), ref('comp.housing'), ref('comp.transport'), ref('comp.other'));
 // This is an exposed L0 pack parameter; its legal interpretation needs reviewer sign-off.
-const prorated = (p: string): Expr => rate(ref(p), ref('period.days_payable'), ref('param.days_basis'));
+// Proration. A full period always pays in full. A partial period pays daily rate (monthly / days_basis) x payable days,
+// capped at days_basis so a 31-day month can never overpay. When a compensation change splits a full period into
+// segments, each segment is its calendar share of the period so the segments add up to exactly one full period.
+const prorated = (p: string): Expr => ({
+  k: 'if', c: flag('period.is_full'),
+  t: rate(ref(p), ref('period.days_payable'), ref('period.days_in_period')),
+  e: rate(ref(p), { k: 'min', a: [ref('period.days_payable'), ref('param.days_basis')] }, ref('param.days_basis')),
+});
 
 const rules: Rule[] = [
   { id: 'ae.earn.basic', code: 'BASIC', label: 'Basic salary', kind: 'earning', always: true, amount: prorated('comp.basic'),
