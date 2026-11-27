@@ -10,11 +10,16 @@
     "test": "vitest run",
     "typecheck": "tsc -p tsconfig.json",
     "db:migrate": "tsx src/db/migrate-cli.ts",
-    "db:seed": "tsx src/seed.ts"
+    "db:seed": "tsx src/seed.ts",
+    "keys:init": "tsx src/cli/keys.ts init",
+    "keys:upgrade": "tsx src/cli/keys.ts upgrade",
+    "keys:rotate-tenant": "tsx src/cli/keys.ts rotate-tenant",
+    "review:rls": "tsx src/cli/review-rls.ts"
   },
   "dependencies": {
     "@aws-sdk/client-kms": "^3.1178.0",
     "@aws-sdk/client-s3": "^3.1178.0",
+    "@aws-sdk/client-secrets-manager": "^3.1178.0",
     "@aws-sdk/s3-request-presigner": "^3.1178.0",
     "@fastify/cookie": "^11.0.0",
     "@fastify/helmet": "^13.0.0",

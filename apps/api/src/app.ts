@@ -7,7 +7,7 @@ import { existsSync } from 'node:fs';
 import { timingSafeEqual } from 'node:crypto';
 import type { Config } from './config.js';
 import type { Pools } from './db/pool.js';
-import { Kms } from './crypto/kms.js';
+import { createKms } from './crypto/kms.js';
 import { createObjectStore } from './storage/index.js';
 import { HttpError } from './errors.js';
 import { principalFromSession, SESSION_COOKIE, type Principal } from './http/principal.js';
@@ -40,7 +40,8 @@ export async function buildApp(cfg: Config, pools: Pools): Promise<{ app: Fastif
     genReqId: () => crypto.randomUUID(),
     disableRequestLogging: cfg.NODE_ENV === 'test',
   });
-  const svc: Services = { cfg, pools, kms: new Kms(cfg.masterKey), objects: createObjectStore(cfg), app, routes: [] };
+  const kms = await createKms(cfg);
+  const svc: Services = { cfg, pools, kms, objects: createObjectStore(cfg), app, routes: [] };
 
   await app.register(helmet, {
     contentSecurityPolicy: { directives: { defaultSrc: ["'self'"], scriptSrc: ["'self'"], styleSrc: ["'self'", "'unsafe-inline'"], imgSrc: ["'self'", 'data:'], connectSrc: ["'self'"],

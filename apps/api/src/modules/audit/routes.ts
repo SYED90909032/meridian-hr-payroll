@@ -3,6 +3,7 @@ import { defineRoute, type Services } from '../../http/route.js';
 import { conflict } from '../../errors.js';
 import { limitQ } from '../../http/schemas.js';
 import { blockMessage, makeSigner, merkleRoot } from '../../crypto/sign.js';
+import { reconcileAuditSeals, writeSealOffBox } from './seals.js';
 
 export function registerAuditRoutes(svc: Services): void {
   const signer = makeSigner(svc.cfg.signingSeed);
@@ -56,9 +57,20 @@ export function registerAuditRoutes(svc: Services): void {
       if (hs.rows.length !== to - from + 1) throw conflict('The audit chain has a gap. Run verify.', 'chain_gap');
       const root = merkleRoot(hs.rows.map((x) => x.hash as string));
       const signature = signer.sign(blockMessage(ctx.tenantId, from, to, root));
-      await db.query('insert into kernel.audit_block (tenant_id, from_seq, to_seq, merkle_root, signature, key_id) values ($1, $2, $3, $4, $5, $6)', [ctx.tenantId, from, to, root, signature, signer.keyId]);
+      const inserted = await db.query('insert into kernel.audit_block (tenant_id, from_seq, to_seq, merkle_root, signature, key_id) values ($1, $2, $3, $4, $5, $6) returning tenant_id, from_seq, to_seq, merkle_root, signature, key_id, sealed_at', [ctx.tenantId, from, to, root, signature, signer.keyId]);
+      await writeSealOffBox(svc.objects, inserted.rows[0] as never, signer.publicKeyPem);
       await audit('audit.sealed', 'audit_block', String(from), { from_seq: from, to_seq: to, merkle_root: root, key_id: signer.keyId });
       return { status: 201, body: { from_seq: from, to_seq: to, merkle_root: root, key_id: signer.keyId } };
+    },
+  });
+  defineRoute(svc, {
+    method: 'POST', path: '/api/v1/audit/reconcile', summary: 'Compare database audit seals with immutable off-box copies', tag: 'Audit', auth: 'session', perm: 'audit.seal', stepUp: true,
+    body: z.object({}).strict(),
+    handler: async ({ db, ctx, p, audit }) => {
+      if (!p.roles.includes('owner')) throw conflict('Only an owner can reconcile audit seals', 'owner_required');
+      const result = await reconcileAuditSeals(db, svc.objects, ctx.tenantId, ctx.userId);
+      if (!result.drift) await audit('audit.seals_reconciled', 'audit_block', ctx.tenantId, { drift: false });
+      return result;
     },
   });
 }
