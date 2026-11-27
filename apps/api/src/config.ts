@@ -8,6 +8,16 @@ const schema = z.object({
   DATABASE_URL_WORKER: z.string().url(),
   /** 32 bytes, base64. Dev only fallback is derived below; production must set it. */
   MERIDIAN_MASTER_KEY: z.string().optional(),
+  /** `local` is development/test only; production uses AWS KMS with a wrapped data key. */
+  KEY_PROVIDER: z.enum(['local', 'aws-kms']).default('local'),
+  MERIDIAN_WRAPPED_MASTER_KEY: z.string().optional(),
+  KMS_KEY_ID: z.string().optional(),
+  KMS_REGION: z.string().default('us-east-1'),
+  KMS_ENDPOINT: z.string().url().optional(),
+  MERIDIAN_DEPLOYMENT: z.string().min(1).default('default'),
+  REQUIRE_SECRET_MANAGER: z.enum(['true', 'false']).default('false'),
+  SECRETS_PROVIDER: z.enum(['env', 'aws-secrets-manager']).default('env'),
+  AWS_SECRETS_MANAGER_SECRET_ID: z.string().optional(),
   /** Ed25519 seed for audit block signing, 32 bytes base64. */
   MERIDIAN_SIGNING_KEY: z.string().optional(),
   COOKIE_SECURE: z.enum(['auto', 'true', 'false']).default('auto'),
@@ -38,12 +48,17 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   }
   const c = parsed.data;
   const prod = c.NODE_ENV === 'production';
+  if (prod && c.KEY_PROVIDER === 'local') throw new Error('KEY_PROVIDER=local is not allowed in production; configure AWS KMS or another managed provider');
+  if (c.KEY_PROVIDER === 'aws-kms' && (!c.KMS_KEY_ID || !c.MERIDIAN_WRAPPED_MASTER_KEY)) throw new Error('KMS_KEY_ID and MERIDIAN_WRAPPED_MASTER_KEY are required when KEY_PROVIDER=aws-kms');
+  if (prod && c.REQUIRE_SECRET_MANAGER === 'true' && c.SECRETS_PROVIDER !== 'aws-secrets-manager') throw new Error('SECRETS_PROVIDER=aws-secrets-manager is required by REQUIRE_SECRET_MANAGER');
+  if (prod && c.SECRETS_PROVIDER === 'aws-secrets-manager' && !c.AWS_SECRETS_MANAGER_SECRET_ID) throw new Error('AWS_SECRETS_MANAGER_SECRET_ID is required when using Secrets Manager');
+  if (prod && c.SECRETS_PROVIDER !== 'aws-secrets-manager' && c.REQUIRE_SECRET_MANAGER !== 'true') console.warn('Meridian warning: production is using environment-backed long-lived secrets; set REQUIRE_SECRET_MANAGER=true after configuring a secret manager');
   let masterKey: Buffer;
   if (c.MERIDIAN_MASTER_KEY) {
     masterKey = Buffer.from(c.MERIDIAN_MASTER_KEY, 'base64');
     if (masterKey.length !== 32) throw new Error('MERIDIAN_MASTER_KEY must decode to exactly 32 bytes');
-  } else if (prod) {
-    throw new Error('MERIDIAN_MASTER_KEY is required in production');
+  } else if (prod && c.KEY_PROVIDER === 'local') {
+    throw new Error('MERIDIAN_MASTER_KEY is required when using the local provider');
   } else {
     // Development and tests only. Never reused in production: the check above refuses to start.
     masterKey = Buffer.alloc(32, 7);

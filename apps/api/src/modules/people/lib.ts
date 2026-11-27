@@ -1,22 +1,40 @@
-import { randomBytes } from 'node:crypto';
 import type { Db } from '../../db/tx.js';
-import type { Kms } from '../../crypto/kms.js';
+import { randomDataKey, wipe, type Kms } from '../../crypto/kms.js';
 import { HttpError } from '../../errors.js';
 
 /**
- * Returns the data key for one person. The key material is derived from the tenant key and a random salt stored in
- * kernel.subject_key. Destroying that salt (shred) makes everything encrypted for the person unreadable, in backups too.
+ * Returns the data key for one person. Version zero is the original HKDF salt format. New rows use a random DEK
+ * wrapped by a versioned tenant key; ciphertexts therefore survive tenant-key and master-key re-wrapping.
  */
 export async function subjectKey(db: Db, kms: Kms, tenantId: string, subjectId: string, create: boolean): Promise<Buffer | null> {
-  const r = await db.query<{ wrapped_key: Buffer | null; destroyed_at: string | null }>('select wrapped_key, destroyed_at from kernel.subject_key where tenant_id = $1 and subject_id = $2', [tenantId, subjectId]);
+  const r = await db.query<{ wrapped_key: Buffer | null; key_version: number; destroyed_at: string | null }>('select wrapped_key, key_version, destroyed_at from kernel.subject_key where tenant_id = $1 and subject_id = $2', [tenantId, subjectId]);
   const row = r.rows[0];
   if (row?.destroyed_at) { if (create) throw new HttpError(409, 'erased', 'This person\'s personal data has been erased'); return null; }
-  if (row?.wrapped_key) return kms.subjectKey(tenantId, subjectId, row.wrapped_key);
+  if (row?.wrapped_key && row.key_version === 0) return kms.subjectKey(tenantId, subjectId, row.wrapped_key);
+  if (row?.wrapped_key && row.key_version > 0) {
+    const t = await db.query<{ version: number; wrapped_key: Buffer }>('select version, wrapped_key from kernel.tenant_key where tenant_id = $1 and version = $2', [tenantId, row.key_version]);
+    if (!t.rows[0]) throw new Error('subject key references a missing tenant key version');
+    const tenantKey = kms.unwrapTenantKey(tenantId, t.rows[0].version, t.rows[0].wrapped_key);
+    try { return kms.unwrapSubjectKey(tenantId, subjectId, t.rows[0].version, tenantKey, row.wrapped_key); } finally { wipe(tenantKey); }
+  }
   if (!create) return null;
-  const salt = randomBytes(32);
-  await db.query('insert into kernel.subject_key (tenant_id, subject_id, wrapped_key) values ($1, $2, $3) on conflict (tenant_id, subject_id) do nothing', [tenantId, subjectId, salt]);
-  const again = await db.query<{ wrapped_key: Buffer }>('select wrapped_key from kernel.subject_key where tenant_id = $1 and subject_id = $2', [tenantId, subjectId]);
-  return kms.subjectKey(tenantId, subjectId, again.rows[0]!.wrapped_key);
+  let tenantKey: Buffer;
+  const active = await db.query<{ version: number; wrapped_key: Buffer }>('select version, wrapped_key from kernel.tenant_key where tenant_id = $1 and status = \'active\' order by version desc limit 1', [tenantId]);
+  if (active.rows[0]) tenantKey = kms.unwrapTenantKey(tenantId, active.rows[0].version, active.rows[0].wrapped_key);
+  else {
+    tenantKey = randomDataKey();
+    const version = 1;
+    await db.query('insert into kernel.tenant_key (tenant_id, version, wrapped_key) values ($1, $2, $3) on conflict (tenant_id, version) do nothing', [tenantId, version, kms.wrapTenantKey(tenantId, version, tenantKey)]);
+  }
+  try {
+    const version = active.rows[0]?.version ?? 1;
+    const dek = randomDataKey();
+    const wrapped = kms.wrapSubjectKey(tenantId, subjectId, version, tenantKey, dek);
+    await db.query('insert into kernel.subject_key (tenant_id, subject_id, wrapped_key, key_version) values ($1, $2, $3, $4) on conflict (tenant_id, subject_id) do nothing', [tenantId, subjectId, wrapped, version]);
+    const again = await db.query<{ wrapped_key: Buffer; key_version: number }>('select wrapped_key, key_version from kernel.subject_key where tenant_id = $1 and subject_id = $2', [tenantId, subjectId]);
+    if (again.rows[0]!.key_version === 0) return kms.subjectKey(tenantId, subjectId, again.rows[0]!.wrapped_key);
+    return kms.unwrapSubjectKey(tenantId, subjectId, again.rows[0]!.key_version, tenantKey, again.rows[0]!.wrapped_key);
+  } finally { wipe(tenantKey); }
 }
 
 /** ISO 13616 mod-97 check. */

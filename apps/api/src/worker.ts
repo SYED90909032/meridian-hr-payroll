@@ -2,7 +2,7 @@ import { loadDotEnv } from './env.js';
 loadDotEnv();
 const { loadConfig } = await import('./config.js');
 const { createPools } = await import('./db/pool.js');
-const { Kms } = await import('./crypto/kms.js');
+const { createKms } = await import('./crypto/kms.js');
 const { deliverOutbox } = await import('./modules/platform/delivery.js');
 import type { OutboxRow } from './modules/platform/delivery.js';
 
@@ -12,7 +12,7 @@ import type { OutboxRow } from './modules/platform/delivery.js';
  */
 const cfg = loadConfig();
 const pools = createPools(cfg);
-const kms = new Kms(cfg.masterKey);
+const kms = await createKms(cfg);
 let stopping = false;
 const backoff = (attempts: number): number => Math.min(3600, 15 * 2 ** Math.min(attempts, 8));
 export async function tick(): Promise<number> {
