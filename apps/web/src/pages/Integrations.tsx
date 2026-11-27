@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { del, fmtDate, fmtDateTime, get, patch, post } from '../api';
+import { del, fmtDate, fmtDateTime, get, patch, post, put } from '../api';
 import { useSession } from '../session';
 import { Banner, Card, Chip, ConfirmModal, Drawer, Empty, ErrorBox, Field, FormModal, Loading, Modal, PageHead, StatusChip, Table, Tabs, useAsync, useToast } from '../ui';
 
@@ -8,15 +8,16 @@ const TOPICS = ['*', 'employee.created', 'employee.updated', 'leave.approved', '
 
 export default function Integrations() {
   const { can } = useSession();
-  const [tab, setTab] = useState<'keys' | 'hooks'>(can('apikey.manage') ? 'keys' : 'hooks');
-  const tabs: Array<['keys' | 'hooks', string]> = [];
+  const [tab, setTab] = useState<'keys' | 'hooks' | 'sso' | 'scim'>(can('apikey.manage') ? 'keys' : can('settings.manage') ? 'sso' : 'hooks');
+  const tabs: Array<['keys' | 'hooks' | 'sso' | 'scim', string]> = [];
   if (can('apikey.manage')) tabs.push(['keys', 'API keys']);
   if (can('webhook.manage')) tabs.push(['hooks', 'Webhooks']);
+  if (can('settings.manage')) { tabs.push(['sso', 'SSO']); tabs.push(['scim', 'SCIM']); }
   return (
     <>
       <PageHead title="Integrations" sub="Connect other systems. Secrets are shown once and stored only as hashes or encrypted." />
       <Tabs tabs={tabs} value={tab} onChange={setTab} />
-      {tab === 'keys' ? <Keys /> : <Hooks />}
+      {tab === 'keys' ? <Keys /> : tab === 'hooks' ? <Hooks /> : tab === 'sso' ? <Sso /> : <Scim />}
     </>
   );
 }
@@ -33,6 +34,35 @@ function SecretShown({ title, label, secret, note, onClose }: { title: string; l
   );
 }
 
+function Sso() {
+  const toast = useToast();
+  const current = useAsync(() => get<{ config: { issuer_url: string; client_id: string; allowed_email_domains: string[]; enabled: boolean; jit_provision: boolean; default_role: string; group_claim: string | null; idp_mfa_satisfies: boolean } | null }>('/iam/sso'), []);
+  const [f, setF] = useState({ issuerUrl: '', clientId: '', clientSecret: '', allowedEmailDomains: '', enabled: false, jitProvision: false, defaultRole: 'employee', groupClaim: '', idpMfaSatisfies: false });
+  const c = current.data?.config;
+  const save = async () => { await put('/iam/sso', { ...f, allowedEmailDomains: f.allowedEmailDomains.split(',').map((x) => x.trim()).filter(Boolean), groupClaim: f.groupClaim || undefined }); toast('SSO settings saved'); current.reload(); };
+  return <Card title="OIDC single sign-on" actions={<Chip tone={c?.enabled ? 'ok' : 'warn'}>{c?.enabled ? 'Enabled' : 'Disabled'}</Chip>}>
+    <p className="muted" style={{ marginTop: 0 }}>Discovery, signature validation, nonce and PKCE checks are handled by the maintained openid-client library. The client secret is encrypted before storage.</p>
+    <div className="grid g2"><Field label="Issuer URL"><input className="input mono" type="url" value={f.issuerUrl || c?.issuer_url || ''} onChange={(e) => setF({ ...f, issuerUrl: e.target.value })} placeholder="https://idp.example.com" /></Field><Field label="Client ID"><input className="input mono" value={f.clientId || c?.client_id || ''} onChange={(e) => setF({ ...f, clientId: e.target.value })} /></Field></div>
+    <Field label="Client secret"><input className="input" type="password" value={f.clientSecret} onChange={(e) => setF({ ...f, clientSecret: e.target.value })} autoComplete="new-password" /></Field>
+    <Field label="Allowed email domains" hint="Comma-separated; leave empty to allow any verified domain."><input className="input mono" value={f.allowedEmailDomains} onChange={(e) => setF({ ...f, allowedEmailDomains: e.target.value })} /></Field>
+    <div className="roles"><label className="check"><input type="checkbox" checked={f.enabled} onChange={(e) => setF({ ...f, enabled: e.target.checked })} /> Enable SSO</label><label className="check"><input type="checkbox" checked={f.jitProvision} onChange={(e) => setF({ ...f, jitProvision: e.target.checked })} /> Allow just-in-time users</label></div>
+    <button className="btn primary" style={{ marginTop: 14 }} disabled={!f.issuerUrl || !f.clientId || !f.clientSecret} onClick={save}>Save SSO settings</button>
+  </Card>;
+}
+function Scim() {
+  const toast = useToast();
+  const list = useAsync(() => get<{ tokens: Array<{ id: string; token_prefix: string; label: string; expires_at: string; revoked_at: string | null }> }>('/iam/scim-tokens'), []);
+  const [show, setShow] = useState<string | null>(null); const [label, setLabel] = useState('Directory provisioning');
+  const create = async () => { const r = await post<{ token: string }>('/iam/scim-tokens', { label, expiresInDays: 365 }); setShow(r.token); list.reload(); };
+  return <Card title="SCIM 2.0 provisioning" actions={<button className="btn primary" onClick={create}>Create token</button>} flush>
+    <p className="muted" style={{ margin: '0 16px 14px' }}>Supported subset: ServiceProviderConfig, Schemas, ResourceTypes, Users list/filter/GET/POST/PUT/PATCH/DELETE (deactivate), and mapped Groups read. Tokens are hashed and shown once.</p>
+    <Field label="Token label"><input className="input" value={label} onChange={(e) => setLabel(e.target.value)} /></Field>
+    {list.data?.tokens.length ? <Table head={['Label', 'Prefix', 'Expires', 'Status', '']}>
+      {list.data.tokens.map((x) => <tr key={x.id}><td>{x.label}</td><td className="mono">{x.token_prefix}…</td><td>{fmtDate(x.expires_at)}</td><td>{x.revoked_at ? <Chip tone="bad">revoked</Chip> : <Chip tone="ok">active</Chip>}</td><td className="right">{!x.revoked_at && <button className="btn sm ghost" onClick={async () => { await del(`/iam/scim-tokens/${x.id}`); toast('Token revoked'); list.reload(); }}>Revoke</button>}</td></tr>)}
+    </Table> : <Empty title="No SCIM tokens" />}
+    {show && <SecretShown title="SCIM bearer token" label="Authorization: Bearer …" secret={show} note="Copy this token now. It cannot be shown again." onClose={() => setShow(null)} />}
+  </Card>;
+}
 function Keys() {
   const toast = useToast();
   const k = useAsync(() => get<{ keys: Array<{ id: string; name: string; prefix: string; scopes: string[]; expires_at: string; revoked_at: string | null; last_used_at: string | null }> }>('/platform/api-keys'), []);

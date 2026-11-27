@@ -70,7 +70,7 @@ for (const step of ['lock-inputs', 'calculate']) must(await c.post(`/api/v1/pay/
 console.log('\nMeridian demo company created.\n');
 console.log(`  Sign in at the web app with:`);
 console.log(`    email:    ${email}`);
-console.log(`    password: ${password}`);
+console.log('    credentials: not printed; use the account recovery flow if they are not available.');
 console.log('\n  The owner has no two-step verification yet: enrol it under Settings > Security.');
 console.log('  A sandbox pay run for October 2026 is calculated and waiting. To approve it you need a second person with the');
 console.log('  payroll approver role and two-step verification (separation of duties). Add one under Settings > People and access.\n');

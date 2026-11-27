@@ -1,41 +1,53 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { defineRoute, type Services } from '../../http/route.js';
-import { forbidden, notFound } from '../../errors.js';
+import { forbidden, notFound, HttpError } from '../../errors.js';
 import { pid, short } from '../../http/schemas.js';
-import { sha256 } from '../../crypto/tokens.js';
-import { newToken } from '../../crypto/tokens.js';
-import { API_KEY_SCOPES } from '../../http/perms.js';
+import { sha256, newToken } from '../../crypto/tokens.js';
+import { API_KEY_SCOPES, API_KEY_WRITE_SCOPES } from '../../http/perms.js';
 import { checkWebhookUrl } from './ssrf.js';
 import { sealWebhookSecret } from './delivery.js';
+import { urlMatchesAllowlist, type WebhookAllowRule } from './allowlist.js';
 
 export const WEBHOOK_TOPICS = ['*', 'employee.created', 'employee.updated', 'leave.approved', 'leave.rejected', 'pay_run.approved', 'pay_run.paid', 'pay_run.published', 'approval.resolved'] as const;
+function requireOwner(roles: string[]): void {
+  if (!roles.includes('owner')) throw forbidden('Only the tenant owner may change this setting');
+}
 
 export function registerPlatformRoutes(svc: Services): void {
   // ---------------------------------------------------------------- API keys
   defineRoute(svc, {
     method: 'GET', path: '/api/v1/platform/api-keys', summary: 'API keys (never the secret)', tag: 'Platform', auth: 'session', perm: 'apikey.manage',
     handler: async ({ db }) => {
-      const r = await db.query('select id, name, prefix, scopes, expires_at, revoked_at, last_used_at, created_at from plat.api_key order by created_at desc limit 200');
+      const r = await db.query(`select id, name, prefix, scopes, allow_write, rate_limit_max, rate_limit_window_seconds,
+        expires_at, (expires_at <= now() + make_interval(days => $1)) as expiry_warning, revoked_at, last_used_at, created_at
+        from plat.api_key order by created_at desc limit 200`, [svc.cfg.API_KEY_EXPIRY_WARNING_DAYS]);
       return { keys: r.rows };
     },
   });
   defineRoute(svc, {
-    method: 'POST', path: '/api/v1/platform/api-keys', summary: 'Create a read-only API key. The secret is shown once.', tag: 'Platform', auth: 'session', perm: 'apikey.manage', stepUp: true,
+    method: 'POST', path: '/api/v1/platform/api-keys', summary: 'Create an API key. The secret is shown once.', tag: 'Platform', auth: 'session', perm: 'apikey.manage', stepUp: true,
     body: z.object({
       name: short(100),
       scopes: z.array(z.enum(API_KEY_SCOPES)).min(1).max(API_KEY_SCOPES.length),
-      expires_in_days: z.number().int().min(1).max(365).default(90),
+      allow_write: z.boolean().default(false),
+      rate_limit_per_minute: z.number().int().min(1).max(10000).default(600),
+      expires_in_days: z.number().int().min(1).max(3650).default(90),
     }).strict(),
     handler: async ({ db, ctx, p, body, audit }) => {
-      // A key can never carry a scope its creator does not hold. The principal builder intersects again on every request.
-      for (const s of body.scopes) if (!p.perms.has(s)) throw forbidden(`You cannot grant ${s}: you do not hold it`);
+      if (body.expires_in_days > svc.cfg.API_KEY_MAX_LIFETIME_DAYS) throw new HttpError(422, 'expiry_too_long', `API keys may expire no later than ${svc.cfg.API_KEY_MAX_LIFETIME_DAYS} days from creation`);
+      const scopes = [...new Set(body.scopes)];
+      for (const s of scopes) if (!p.perms.has(s)) throw forbidden(`You cannot grant ${s}: you do not hold it`);
+      if (body.allow_write) {
+        if (!scopes.some((s) => API_KEY_WRITE_SCOPES.has(s))) throw new HttpError(422, 'write_scope_required', 'Write opt-in requires a permitted write scope');
+      }
       const prefix = randomBytes(4).toString('hex');
       const key = `mk_${prefix}_${newToken(32)}`;
       const r = await db.query(
-        `insert into plat.api_key (tenant_id, name, prefix, key_hash, scopes, created_by, expires_at) values ($1, $2, $3, $4, $5, $6, now() + make_interval(days => $7)) returning id, expires_at`,
-        [ctx.tenantId, body.name, prefix, sha256(key), [...new Set(body.scopes)], ctx.userId, body.expires_in_days]);
-      await audit('apikey.created', 'api_key', r.rows[0].id, { scopes: body.scopes, expires_at: r.rows[0].expires_at });
+        `insert into plat.api_key (tenant_id, name, prefix, key_hash, scopes, allow_write, rate_limit_max, created_by, expires_at)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, now() + make_interval(days => $9)) returning id, expires_at`,
+        [ctx.tenantId, body.name, prefix, sha256(key), scopes, body.allow_write, body.rate_limit_per_minute, ctx.userId, body.expires_in_days]);
+      await audit('apikey.created', 'api_key', r.rows[0].id, { scopes, allow_write: body.allow_write, rate_limit_per_minute: body.rate_limit_per_minute, expires_at: r.rows[0].expires_at });
       return { status: 201, body: { id: r.rows[0].id, key, expires_at: r.rows[0].expires_at, note: 'Copy this key now. It cannot be shown again.' } };
     },
   });
@@ -47,6 +59,27 @@ export function registerPlatformRoutes(svc: Services): void {
       if (!r.rows[0]) throw notFound('Key not found');
       await audit('apikey.revoked', 'api_key', id, {});
       return { revoked: true };
+    },
+  });
+  // ---------------------------------------------------------- webhook allow-list
+  defineRoute(svc, {
+    method: 'GET', path: '/api/v1/platform/webhook-allowlist', summary: 'Webhook destination allow-list', tag: 'Platform', auth: 'session', perm: 'webhook.manage',
+    handler: async ({ db, p }) => { requireOwner(p.roles); const r = await db.query('select id, host, path_prefix from plat.webhook_allowlist order by host, path_prefix'); return { rules: r.rows }; },
+  });
+  defineRoute(svc, {
+    method: 'PUT', path: '/api/v1/platform/webhook-allowlist', summary: 'Replace the webhook destination allow-list', tag: 'Platform', auth: 'session', perm: 'webhook.manage', stepUp: true,
+    body: z.object({ rules: z.array(z.object({ host: z.string().min(1).max(253).regex(/^[a-z0-9.-]+$/), path_prefix: z.string().min(1).max(500).regex(/^\//) }).strict()).max(100) }).strict(),
+    handler: async ({ db, p, ctx, body, audit }) => {
+      requireOwner(p.roles);
+      for (const rule of body.rules) {
+        if (rule.host.includes('..') || rule.host.startsWith('.') || rule.host.endsWith('.')) throw new HttpError(422, 'invalid_allowlist_host', 'Invalid destination host');
+        const url = checkWebhookUrl(`https://${rule.host}${rule.path_prefix}`);
+        if (url.hostname !== rule.host) throw new HttpError(422, 'invalid_allowlist_host', 'Invalid destination host');
+      }
+      await db.query('delete from plat.webhook_allowlist');
+      for (const rule of body.rules) await db.query('insert into plat.webhook_allowlist (tenant_id, host, path_prefix) values ($1, $2, $3)', [ctx.tenantId, rule.host, rule.path_prefix]);
+      await audit('webhook.allowlist_changed', 'tenant', ctx.tenantId, { count: body.rules.length });
+      return { rules: body.rules };
     },
   });
   // ---------------------------------------------------------------- webhooks
@@ -61,7 +94,9 @@ export function registerPlatformRoutes(svc: Services): void {
     method: 'POST', path: '/api/v1/platform/webhooks', summary: 'Register a webhook endpoint. The signing secret is shown once.', tag: 'Platform', auth: 'session', perm: 'webhook.manage', stepUp: true,
     body: z.object({ url: z.string().url().max(500), events: z.array(z.enum(WEBHOOK_TOPICS)).min(1).max(20) }).strict(),
     handler: async ({ db, ctx, body, audit }) => {
-      const url = checkWebhookUrl(body.url); // static checks now, DNS-level checks again at every delivery
+      const url = checkWebhookUrl(body.url);
+      const rules = (await db.query<WebhookAllowRule>('select host, path_prefix from plat.webhook_allowlist')).rows;
+      if (!urlMatchesAllowlist(url, rules)) throw new HttpError(422, 'webhook_destination_not_allowed', 'The destination is not in this tenant allow-list');
       const id = randomUUID();
       const secret = 'whsec_' + newToken(32);
       await db.query('insert into plat.webhook_endpoint (id, tenant_id, url, secret_enc, events, created_by) values ($1, $2, $3, $4, $5, $6)',

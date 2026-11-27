@@ -4,19 +4,21 @@ import { ZodError, z } from 'zod';
 import type { Config } from '../config.js';
 import type { Pools } from '../db/pool.js';
 import type { Kms } from '../crypto/kms.js';
+import type { ObjectStore } from '../storage/objectStore.js';
+import type { Scanner } from '../storage/scanner.js';
 import { audit, emit, withTx, type Ctx, type Db, type SystemActor } from '../db/tx.js';
 import { HttpError, badRequest, forbidden, unauthorized } from '../errors.js';
 import { sha256hex } from '../crypto/tokens.js';
 import type { Perm } from './perms.js';
 import type { Principal } from './principal.js';
 
-export interface Services { cfg: Config; pools: Pools; kms: Kms; app: FastifyInstance; routes: RouteMeta[] }
+export interface Services { cfg: Config; pools: Pools; kms: Kms; objects: ObjectStore; scanner: Scanner; app: FastifyInstance; routes: RouteMeta[] }
 
 export interface RouteMeta {
   method: string; path: string; summary: string; tag: string; auth: AuthKind; perm?: Perm; stepUp: boolean;
   body?: ZodTypeAny; query?: ZodTypeAny; idempotent?: 'required' | 'optional'; readOnlyKey: boolean;
 }
-export type AuthKind = 'public' | 'user' | 'session' | 'device' | 'any';
+export type AuthKind = 'public' | 'user' | 'session' | 'device' | 'scim' | 'any';
 
 export interface HandlerArgs<B, Q> {
   p: Principal; ctx: Ctx; db: Db; body: B; query: Q; params: Record<string, string>; req: FastifyRequest; reply: FastifyReply;
@@ -68,15 +70,22 @@ export function defineRoute<B extends ZodTypeAny = ZodTypeAny, Q extends ZodType
         if (!p) throw unauthorized();
         if (def.auth === 'session' && p.kind !== 'user') throw forbidden('This action needs a signed-in user');
         if (def.auth === 'device' && p.kind !== 'device') throw unauthorized();
+        if (def.auth === 'scim' && p.kind !== 'scim') throw unauthorized();
         if (def.auth === 'any' && p.kind === 'device') throw forbidden();
         if ((def.auth === 'session' || def.auth === 'any') && !p.tenantId) throw new HttpError(409, 'tenant_required', 'Choose a company first');
-        if (p.kind === 'apikey' && def.method !== 'GET') throw forbidden('API keys are read-only');
+        if (p.kind === 'apikey' && def.method !== 'GET' && (!p.allowWrite || !def.perm || !p.perms.has(def.perm))) throw forbidden('This API key is not authorised for writes');
         if (p.mustChangePassword && !def.path.startsWith('/api/v1/auth/')) throw new HttpError(403, 'password_change_required', 'Change your password to continue');
+        if (p.kind === 'user' && p.tenantId && !p.totpEnabled && !['/api/v1/auth/me', '/api/v1/auth/logout', '/api/v1/auth/step-up'].includes(def.path) && !def.path.startsWith('/api/v1/auth/mfa/')) {
+          const policy = await svc.pools.auth.query<{ required_roles: string[] }>('select required_roles from kernel.tenant_mfa_policy where tenant_id = $1', [p.tenantId]);
+          const required = policy.rows[0]?.required_roles ?? [];
+          if (required.some((role) => p.roles.includes(role))) throw new HttpError(403, 'mfa_enrollment_required', 'Enrol two-step verification before using this company');
+        }
       }
       // 2. Authorisation
       if (def.perm && (!p || !p.perms.has(def.perm))) throw forbidden();
       if (def.requireMfa && !(p?.totpEnabled && p.mfa)) throw new HttpError(403, 'mfa_required', 'Turn on two-step verification to do this');
       if (def.stepUp) {
+        if (p?.kind === 'apikey') throw new HttpError(403, 'step_up_unavailable', 'API keys cannot use step-up routes');
         const fresh = p?.stepUpAt && Date.now() - p.stepUpAt.getTime() < 10 * 60_000;
         if (!fresh) throw new HttpError(401, 'step_up_required', 'Confirm your identity to continue');
       }
@@ -148,7 +157,7 @@ export function openApiDocument(routes: RouteMeta[]): Record<string, unknown> {
     const params = [...r.path.matchAll(/:([A-Za-z0-9_]+)/g)].map((m) => ({ name: m[1], in: 'path', required: true, schema: { type: 'string' } }));
     const op: Record<string, unknown> = {
       summary: r.summary, tags: [r.tag], parameters: params,
-      security: r.auth === 'public' ? [] : r.auth === 'device' ? [{ deviceKey: [] }] : r.auth === 'any' ? [{ cookieAuth: [] }, { apiKey: [] }] : [{ cookieAuth: [] }],
+      security: r.auth === 'public' ? [] : r.auth === 'device' ? [{ deviceKey: [] }] : r.auth === 'scim' ? [{ scimBearer: [] }] : r.auth === 'any' ? [{ cookieAuth: [] }, { apiKey: [] }] : [{ cookieAuth: [] }],
       'x-required-permission': r.perm ?? null, 'x-step-up': r.stepUp, 'x-idempotency': r.idempotent ?? null,
       responses: { '200': { description: 'OK' }, '400': { description: 'Invalid request' }, '401': { description: 'Not signed in' }, '403': { description: 'Not allowed' } },
     };
@@ -167,6 +176,7 @@ export function openApiDocument(routes: RouteMeta[]): Record<string, unknown> {
       cookieAuth: { type: 'apiKey', in: 'cookie', name: 'mer_sid' },
       apiKey: { type: 'apiKey', in: 'header', name: 'X-Api-Key' },
       deviceKey: { type: 'apiKey', in: 'header', name: 'X-Device-Key' },
+      scimBearer: { type: 'http', scheme: 'bearer' },
     } },
   };
 }

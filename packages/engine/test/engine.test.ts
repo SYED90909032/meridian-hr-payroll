@@ -266,3 +266,48 @@ describe('WPS SIF builder', () => {
     expect(() => buildSif(header, [])).toThrow();
   });
 });
+
+describe('Phase 4 edge cases', () => {
+  it('uses the exposed 30-day basis for a one-day joiner in a 31-day month', () => {
+    const r = calculate(base({
+      period: { start: '2026-01-31', end: '2026-01-31', days_in_period: 31, days_payable: 1 },
+      comp: { basic: 1_000_000, housing: 0, transport: 0, other: 0 },
+    }), pack);
+    expect(line(r, 'BASIC')).toBe(33_333);
+  });
+
+  it('emits both compensation segments with the same rule id and segment explanations', () => {
+    const r = calculate(base({
+      comp: { basic: 1_500_000, housing: 0, transport: 0, other: 0 },
+      comp_segments: [
+        { from: '2026-11-01', to: '2026-11-15', days: 15, basic: 1_000_000, housing: 0, transport: 0, other: 0 },
+        { from: '2026-11-16', to: '2026-11-30', days: 15, basic: 2_000_000, housing: 0, transport: 0, other: 0 },
+      ],
+    }), pack);
+    expect(r.lines.filter((x) => x.code === 'BASIC').map((x) => x.amount_minor)).toEqual([500_000, 1_000_000]);
+    expect(r.lines.filter((x) => x.code === 'BASIC').every((x) => x.rule_id === 'ae.earn.basic' && x.explain.includes('Segment'))).toBe(true);
+  });
+
+  it('keeps contractor runs free of statutory deductions and gratuity', () => {
+    const r = calculate(base({
+      employee: { id: 'contractor', is_uae_national: true, employment_type: 'contractor' },
+      run: { type: 'final', mode: 'sandbox' },
+      final: { service_days: 2555, leave_balance_days_x1000: 12_500, notice_pay_days_x1000: 30_000 },
+    }), pack);
+    expect(r.status).toBe('ok');
+    expect(r.lines.some((x) => ['GPSSA_EE', 'GPSSA_ER', 'GPSSA_GOV', 'GRATUITY', 'LEAVE_ENCASHMENT', 'NOTICE_PAY'].includes(x.code))).toBe(false);
+  });
+
+  it('supports an adjustment-only off-cycle input without a regular salary line', () => {
+    const r = calculate(base({
+      run: { type: 'off_cycle', mode: 'sandbox' },
+      comp: { basic: 0, housing: 0, transport: 0, other: 0 },
+      period: { start: '2026-11-01', end: '2026-11-30', days_in_period: 30, days_payable: 0 },
+      statutory: { contribution_salary_minor: 0 },
+      adjustments: [{ code: 'BONUS', label: 'Bonus', kind: 'earning', amount_minor: 250_000, source_id: 'bonus-1', voluntary: true, variable: true }],
+    }), pack);
+    expect(r.status).toBe('ok');
+    expect(r.totals.gross_minor).toBe(250_000);
+    expect(r.lines.find((x) => x.code === 'BONUS')?.rule_id).toBe('adjustment');
+  });
+});

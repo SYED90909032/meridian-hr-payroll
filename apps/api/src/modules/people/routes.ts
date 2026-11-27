@@ -6,6 +6,7 @@ import { sha256hex } from '../../crypto/tokens.js';
 import { emiratesIdValid, ibanValid, magicMatches, normaliseIban, subjectKey } from './lib.js';
 import { notifyEmployee, notifyRoles } from '../flow/notify.js';
 import type { Db } from '../../db/tx.js';
+import { applyScanResult, decryptDocument, documentAad, encryptDocument, newDocumentId, safeDownloadName, deleteEmployeeObjects } from './documents.js';
 
 const uuid = z.string().uuid();
 const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine((d) => !Number.isNaN(Date.parse(d)), 'Invalid date');
@@ -13,7 +14,7 @@ const short = (n: number) => z.string().trim().min(1).max(n);
 const minor = z.number().int().min(0).max(Number.MAX_SAFE_INTEGER);
 
 const EMP_COLS = `e.id, e.employee_no, e.first_name, e.last_name, e.work_email::text as work_email, e.org_unit_id, ou.name as org_unit_name, e.manager_id,
-  (m.first_name || ' ' || m.last_name) as manager_name, e.job_title, e.status, e.employment_type, e.hire_date, e.termination_date, e.is_uae_national, e.nationality, e.version`;
+  (m.first_name || ' ' || m.last_name) as manager_name, e.job_title, e.status, e.employment_type, e.hire_date, e.termination_date, e.contract_notice_days, e.is_uae_national, e.nationality, e.version`;
 const EMP_FROM = `people.employee e left join people.org_unit ou on ou.id = e.org_unit_id left join people.employee m on m.id = e.manager_id`;
 
 function pid(v: string | undefined): string {
@@ -32,7 +33,7 @@ async function mustExist(db: Db, id: string): Promise<{ id: string; status: stri
 }
 
 export function registerPeopleRoutes(svc: Services): void {
-  const { kms, pools } = svc;
+  const { kms, pools, objects, scanner } = svc;
 
   // ---------------------------------------------------------------- directory
   defineRoute(svc, {
@@ -64,12 +65,12 @@ export function registerPeopleRoutes(svc: Services): void {
 
   const empBody = z.object({
     firstName: short(80), lastName: short(80), workEmail: z.string().trim().toLowerCase().email().max(254).optional(), orgUnitId: uuid.optional(), managerId: uuid.optional(),
-    jobTitle: short(120).optional(), employmentType: z.enum(['full_time', 'part_time', 'contractor']).default('full_time'), hireDate: isoDate,
+    jobTitle: short(120).optional(), employmentType: z.enum(['full_time', 'part_time', 'contractor']).default('full_time'), contractNoticeDays: z.number().int().min(0).max(3660).default(0), hireDate: isoDate,
     isUaeNational: z.boolean().default(false), nationality: short(60).optional(),
   }).strict();
 
   defineRoute(svc, {
-    method: 'POST', path: '/api/v1/people/employees', summary: 'Create an employee', tag: 'People', auth: 'session', perm: 'people.write', actors: ['hr'], idempotent: 'optional', body: empBody,
+    method: 'POST', path: '/api/v1/people/employees', summary: 'Create an employee', tag: 'People', auth: 'any', perm: 'people.write', actors: ['hr'], idempotent: 'optional', body: empBody,
     handler: async ({ db, ctx, body, audit }) => {
       const n = await db.query(`select coalesce(max(substring(employee_no from 2)::int), 0) + 1 as n from people.employee where employee_no ~ '^E[0-9]+$'`);
       const no = 'E' + String(n.rows[0].n).padStart(4, '0');
@@ -77,9 +78,9 @@ export function registerPeopleRoutes(svc: Services): void {
       if (body.orgUnitId && !(await db.query('select 1 from people.org_unit where id = $1', [body.orgUnitId])).rowCount) throw badRequest('Org unit not found');
       if (body.managerId && !(await db.query('select 1 from people.employee where id = $1', [body.managerId])).rowCount) throw badRequest('Manager not found');
       const r = await db.query(
-        `insert into people.employee (tenant_id, employee_no, first_name, last_name, work_email, org_unit_id, manager_id, job_title, employment_type, hire_date, is_uae_national, nationality)
-         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) returning id, employee_no`,
-        [ctx.tenantId, no, body.firstName, body.lastName, body.workEmail ?? null, org, body.managerId ?? null, body.jobTitle ?? null, body.employmentType, body.hireDate, body.isUaeNational, body.nationality ?? null]);
+        `insert into people.employee (tenant_id, employee_no, first_name, last_name, work_email, org_unit_id, manager_id, job_title, employment_type, contract_notice_days, hire_date, is_uae_national, nationality)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) returning id, employee_no`,
+        [ctx.tenantId, no, body.firstName, body.lastName, body.workEmail ?? null, org, body.managerId ?? null, body.jobTitle ?? null, body.employmentType, body.contractNoticeDays, body.hireDate, body.isUaeNational, body.nationality ?? null]);
       const e = r.rows[0];
       await db.query(`insert into people.employee_event (tenant_id, employee_id, kind, effective_date, detail, created_by) values ($1, $2, 'hired', $3, '{}', $4)`, [ctx.tenantId, e.id, body.hireDate, ctx.userId]);
       // Opening leave entitlement is created by the time module on the first leave query; nothing else to do here.
@@ -89,10 +90,10 @@ export function registerPeopleRoutes(svc: Services): void {
   });
 
   defineRoute(svc, {
-    method: 'PATCH', path: '/api/v1/people/employees/:id', summary: 'Update an employee (optimistic version check)', tag: 'People', auth: 'session', perm: 'people.write', actors: ['hr'],
+    method: 'PATCH', path: '/api/v1/people/employees/:id', summary: 'Update an employee (optimistic version check)', tag: 'People', auth: 'any', perm: 'people.write', actors: ['hr'],
     body: z.object({ version: z.number().int().min(1), firstName: short(80).optional(), lastName: short(80).optional(), workEmail: z.string().trim().toLowerCase().email().max(254).nullable().optional(),
       orgUnitId: uuid.nullable().optional(), managerId: uuid.nullable().optional(), jobTitle: short(120).nullable().optional(),
-      employmentType: z.enum(['full_time', 'part_time', 'contractor']).optional(), isUaeNational: z.boolean().optional(), nationality: short(60).nullable().optional(),
+      employmentType: z.enum(['full_time', 'part_time', 'contractor']).optional(), contractNoticeDays: z.number().int().min(0).max(3660).optional(), isUaeNational: z.boolean().optional(), nationality: short(60).nullable().optional(),
       status: z.enum(['active', 'on_leave']).optional(), effectiveDate: isoDate.optional() }).strict(),
     handler: async ({ db, ctx, params, body, audit }) => {
       const id = pid(params.id);
@@ -103,7 +104,7 @@ export function registerPeopleRoutes(svc: Services): void {
       if (e.version !== body.version) throw conflict('Someone else changed this record. Reload and try again.', 'version_conflict');
       const map: Record<string, [string, unknown]> = {
         firstName: ['first_name', body.firstName], lastName: ['last_name', body.lastName], workEmail: ['work_email', body.workEmail], orgUnitId: ['org_unit_id', body.orgUnitId],
-        managerId: ['manager_id', body.managerId], jobTitle: ['job_title', body.jobTitle], employmentType: ['employment_type', body.employmentType],
+        managerId: ['manager_id', body.managerId], jobTitle: ['job_title', body.jobTitle], employmentType: ['employment_type', body.employmentType], contractNoticeDays: ['contract_notice_days', body.contractNoticeDays],
         isUaeNational: ['is_uae_national', body.isUaeNational], nationality: ['nationality', body.nationality], status: ['status', body.status],
       };
       const sets: string[] = []; const args: unknown[] = []; const changed: string[] = [];
@@ -301,41 +302,77 @@ export function registerPeopleRoutes(svc: Services): void {
   defineRoute(svc, {
     method: 'GET', path: '/api/v1/people/employees/:id/documents', summary: 'Documents on file', tag: 'People', auth: 'session',
     handler: async ({ db, params }) => {
-      const r = await db.query('select id, kind, name, mime, size_bytes, sha256, created_at from people.document where employee_id = $1 order by created_at desc', [pid(params.id)]);
+      const r = await db.query('select id, kind, name, mime, size_bytes, sha256, status, scan_signature, created_at from people.document where employee_id = $1 order by created_at desc', [pid(params.id)]);
       return { documents: r.rows };
     },
   });
   defineRoute(svc, {
-    method: 'POST', path: '/api/v1/people/employees/:id/documents', summary: 'Upload a document (base64, up to 5 MB, encrypted at rest)', tag: 'People', auth: 'session', perm: 'docs.write', bodyLimit: 8 * 1024 * 1024,
+    method: 'POST', path: '/api/v1/people/employees/:id/documents', summary: 'Upload a document (scan-gated and encrypted at rest)', tag: 'People', auth: 'session', perm: 'docs.write', bodyLimit: 8 * 1024 * 1024,
     body: z.object({ kind: z.enum(['contract', 'id_copy', 'certificate', 'letter', 'other']), name: z.string().trim().min(1).max(200).regex(/^[^\\/\x00-\x1f]+$/, 'File name has invalid characters'),
       mime: z.enum(['application/pdf', 'image/png', 'image/jpeg', 'text/plain']), contentBase64: z.string().max(7_200_000) }).strict(),
-    handler: async ({ db, ctx, params, body, audit }) => {
+    handler: async ({ db, ctx, params, body, audit, emit }) => {
       const id = pid(params.id);
       await mustExist(db, id);
       const buf = Buffer.from(body.contentBase64, 'base64');
-      if (buf.length < 1 || buf.length > 5 * 1024 * 1024) throw badRequest('File must be between 1 byte and 5 MB');
+      if (buf.length < 1 || buf.length > svc.cfg.DOCUMENT_MAX_BYTES) throw badRequest(`File must be between 1 byte and ${Math.floor(svc.cfg.DOCUMENT_MAX_BYTES / (1024 * 1024))} MB`);
       if (!magicMatches(body.mime, buf)) throw badRequest('File content does not match its type');
-      const key = (await subjectKey(db, kms, ctx.tenantId, id, true))!;
-      const docId = crypto.randomUUID();
-      await db.query('insert into people.document (id, tenant_id, employee_id, kind, name, mime, size_bytes, sha256, content_enc, created_by) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)',
-        [docId, ctx.tenantId, id, body.kind, body.name, body.mime, buf.length, sha256hex(buf), seal(key, buf, `${id}:doc:${docId}`), ctx.userId]);
-      await audit('document.uploaded', 'document', docId, { employee_id: id, kind: body.kind, size: buf.length });
-      return { status: 201, body: { id: docId } };
+      if (!/^[A-Za-z0-9+/]*={0,2}$/.test(body.contentBase64) || body.contentBase64.length % 4 === 1) throw badRequest('Invalid base64 content');
+      const docId = newDocumentId();
+      const scan = await scanner.scan(buf);
+      if (scan.status === 'infected') {
+        await db.query("insert into people.document (id, tenant_id, employee_id, kind, name, mime, size_bytes, sha256, status, scan_signature, scanned_at, created_by) values ($1,$2,$3,$4,$5,$6,$7,$8,'quarantined',$9,now(),$10)",
+          [docId, ctx.tenantId, id, body.kind, body.name, body.mime, buf.length, sha256hex(buf), scan.signature, ctx.userId]);
+        await notifyRoles(db, ctx.tenantId, ['hr_admin', 'owner'], { kind: 'document.quarantined', title: 'A document was quarantined', body: 'A document upload was blocked by the malware scanner.', link: `/people/${id}` }, ctx.userId);
+        await notifyEmployee(db, ctx.tenantId, id, { kind: 'document.quarantined', title: 'A document upload was blocked', body: 'The uploaded document was quarantined by the malware scanner.' });
+        await audit('document.quarantined', 'document', docId, { employee_id: id, kind: body.kind, signature: scan.signature });
+        return { status: 201, body: { id: docId, status: 'quarantined', message: 'The document was blocked by the malware scanner and is not available.' } };
+      }
+      if (scan.status === 'error') {
+        const pendingKey = await encryptDocument(kms, db, objects, ctx.tenantId, id, docId, buf, 'pending');
+        await db.query("insert into people.document (id, tenant_id, employee_id, kind, name, mime, size_bytes, sha256, object_key, status, scan_error, created_by) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,'pending_scan',$10,$11)",
+          [docId, ctx.tenantId, id, body.kind, body.name, body.mime, buf.length, sha256hex(buf), pendingKey, scan.message, ctx.userId]);
+        await emit('document.scan', { document_id: docId, employee_id: id, user_id: ctx.userId }, `document-scan:${docId}`);
+        await audit('document.pending_scan', 'document', docId, { employee_id: id, kind: body.kind });
+        return { status: 202, body: { id: docId, status: 'pending_scan', message: 'The document is unavailable until malware scanning succeeds.' } };
+      }
+      const objectKey = await encryptDocument(kms, db, objects, ctx.tenantId, id, docId, buf);
+      await db.query("insert into people.document (id, tenant_id, employee_id, kind, name, mime, size_bytes, sha256, object_key, status, scanned_at, created_by) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,'available',now(),$10)",
+        [docId, ctx.tenantId, id, body.kind, body.name, body.mime, buf.length, sha256hex(buf), objectKey, ctx.userId]);
+      await audit('document.uploaded', 'document', docId, { employee_id: id, kind: body.kind, size: buf.length, storage: 'object_store' });
+      return { status: 201, body: { id: docId, status: 'available' } };
     },
   });
   defineRoute(svc, {
-    method: 'GET', path: '/api/v1/people/documents/:docId', summary: 'Download a document', tag: 'People', auth: 'session',
+    method: 'GET', path: '/api/v1/people/documents/:docId', summary: 'Download a scanned document', tag: 'People', auth: 'session', stepUp: true,
     handler: async ({ db, ctx, p, params, audit, reply }) => {
-      const r = await db.query('select id, employee_id, name, mime, content_enc, sha256 from people.document where id = $1', [pid(params.docId)]);
+      const r = await db.query('select id, employee_id, name, mime, content_enc, object_key, sha256, status from people.document where id = $1', [pid(params.docId)]);
       const d = r.rows[0];
       if (!d) throw notFound('Document not found');
-      const key = await subjectKey(db, kms, ctx.tenantId, d.employee_id, false);
-      if (!key) throw new HttpError(410, 'erased', 'This document has been erased');
-      const buf = open(key, d.content_enc, `${d.employee_id}:doc:${d.id}`);
-      if (sha256hex(buf) !== d.sha256) throw new Error('document integrity check failed');
+      if (d.status === 'quarantined') throw new HttpError(410, 'quarantined', 'This document was quarantined and cannot be downloaded');
+      if (d.status !== 'available') throw new HttpError(409, 'document_unavailable', 'This document is not available until malware scanning succeeds');
+      let buf: Buffer;
+      if (d.object_key) buf = await decryptDocument(kms, db, objects, ctx.tenantId, d.employee_id, d.id, d.object_key, d.sha256);
+      else {
+        const key = await subjectKey(db, kms, ctx.tenantId, d.employee_id, false);
+        if (!key || !d.content_enc) throw new HttpError(410, 'erased', 'This document has been erased');
+        try { buf = open(key, d.content_enc, `${d.employee_id}:doc:${d.id}`); } catch { throw new HttpError(422, 'integrity_error', 'The document archive failed its integrity check'); }
+        if (sha256hex(buf) !== d.sha256) throw new HttpError(422, 'integrity_error', 'The document archive failed its integrity check');
+      }
       if (!isSelf(p, d.employee_id)) await audit('document.downloaded', 'document', d.id, { employee_id: d.employee_id });
-      reply.header('Content-Type', d.mime).header('Content-Disposition', `attachment; filename="${d.name.replace(/["\r\n]/g, '_')}"`).header('X-Content-Type-Options', 'nosniff');
+      reply.header('Content-Type', d.mime).header('Content-Disposition', `attachment; filename="${safeDownloadName(d.name)}"`).header('X-Content-Type-Options', 'nosniff').header('Cache-Control', 'no-store');
       return { body: buf };
+    },
+  });
+  defineRoute(svc, {
+    method: 'DELETE', path: '/api/v1/people/documents/:docId', summary: 'Delete a document or quarantine record', tag: 'People', auth: 'session', perm: 'docs.write', stepUp: true,
+    handler: async ({ db, params, audit }) => {
+      const id = pid(params.docId);
+      const r = await db.query<{ employee_id: string; object_key: string | null }>('select employee_id, object_key from people.document where id = $1', [id]);
+      if (!r.rows[0]) throw notFound('Document not found');
+      if (r.rows[0].object_key) await objects.delete(r.rows[0].object_key);
+      await db.query('delete from people.document where id = $1', [id]);
+      await audit('document.deleted', 'document', id, { employee_id: r.rows[0].employee_id });
+      return { status: 204, body: undefined };
     },
   });
 
@@ -343,12 +380,14 @@ export function registerPeopleRoutes(svc: Services): void {
   defineRoute(svc, {
     method: 'POST', path: '/api/v1/people/employees/:id/erase-personal-data', summary: 'Destroy the person\'s encryption key (identity data and documents become unreadable)', tag: 'People', auth: 'session', perm: 'settings.manage', stepUp: true,
     body: z.object({ confirm: z.literal('ERASE') }).strict(),
+    actors: ['hr', 'payroll'],
     handler: async ({ db, ctx, params, audit }) => {
       const id = pid(params.id);
       const emp = await mustExist(db, id);
       if (emp.status !== 'terminated') throw conflict('Only terminated employees can be erased', 'not_terminated');
       const hold = await db.query('select 1 from kernel.legal_hold where subject_id = $1 and released_at is null', [id]);
       if (hold.rowCount) throw conflict('A legal hold prevents erasure', 'legal_hold');
+      await deleteEmployeeObjects(db, objects, id);
       await db.query('update kernel.subject_key set wrapped_key = null, destroyed_at = now() where subject_id = $1 and destroyed_at is null', [id]);
       await db.query('update people.employee_private set dob = null, phone = null, address = null where employee_id = $1', [id]);
       await audit('employee.erased', 'employee', id, { note: 'key destroyed; payroll records retained under statutory retention' });

@@ -2,10 +2,12 @@ import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 // Bundles only the Solar icons referenced in src/ (see scripts/build-solar-subset.mjs).
 import { solarSubsetPlugin } from './scripts/build-solar-subset.mjs';
+const apiProxy = { '/api': { target: process.env.E2E_API_URL ?? 'http://localhost:8080', changeOrigin: false } };
 
 export default defineConfig({
   plugins: [solarSubsetPlugin(), react()],
-  server: { port: 5173, proxy: { '/api': { target: 'http://localhost:8080', changeOrigin: false } } },
+  server: { port: 5173, proxy: apiProxy },
+  preview: { proxy: apiProxy },
   build: {
     outDir: 'dist',
     sourcemap: false,

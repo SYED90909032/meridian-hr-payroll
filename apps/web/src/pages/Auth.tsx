@@ -6,6 +6,7 @@
  * New: "Create workspace" lets the owner pick a profile picture (stored on this device).
  */
 import { useEffect, useState, type ReactNode } from 'react';
+import { startAuthentication } from '@simplewebauthn/browser';
 import { Link, Navigate, useNavigate } from 'react-router-dom';
 import { Box, Card, Divider, Stack, Typography } from '@mui/material';
 import { ApiError, errMsg, post } from '../api';
@@ -76,6 +77,7 @@ export function Login() {
   const [code, setCode] = useState('');
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [slug, setSlug] = useState('');
   if (me) return <Navigate to={me.user.mustChangePassword ? '/account/password' : '/'} replace />;
   const submit = async (e: React.FormEvent) => {
     e.preventDefault(); setBusy(true); setErr(null);
@@ -85,6 +87,11 @@ export function Login() {
     } catch (x) {
       if (x instanceof ApiError && x.code === 'mfa_required') { setNeedCode(true); setErr(null); } else setErr(errMsg(x));
     } finally { setBusy(false); }
+  };
+  const passkey = async () => {
+    setBusy(true); setErr(null);
+    try { const options = await post<Record<string, unknown>>('/auth/passkey/options', email.trim() ? { email: email.trim() } : {}); const response = await startAuthentication({ optionsJSON: options as never }); await post('/auth/passkey/verify', { response }); await refresh(); nav('/'); }
+    catch (x) { setErr(errMsg(x)); } finally { setBusy(false); }
   };
   return (
     <AuthShell title="Welcome back" sub="Sign in to your Meridian workspace.">
@@ -100,11 +107,43 @@ export function Login() {
         <Submit busy={busy}>{busy ? 'Signing in…' : needCode ? 'Verify and sign in' : 'Sign in'}</Submit>
         {needCode && <button type="button" className="btn ghost sm" style={{ marginTop: 10 }} onClick={() => { setUseRecovery(!useRecovery); setCode(''); }}>{useRecovery ? 'Use authenticator code' : 'Use a recovery code'}</button>}
       </form>
+      <button type="button" className="btn" style={{ width: '100%', marginTop: 12 }} disabled={busy} onClick={passkey}>Sign in with passkey</button>
+      <div className="row" style={{ marginTop: 12 }}><input className="input" aria-label="Company slug for SSO" placeholder="Company slug" value={slug} onChange={(e) => setSlug(e.target.value.toLowerCase())} /><button type="button" className="btn" disabled={!slug || busy} onClick={() => { window.location.href = `/api/v1/auth/sso/${encodeURIComponent(slug)}/start?redirect=/`; }}>Sign in with SSO</button></div>
       <Divider sx={{ my: 3.5 }} />
+      <Typography sx={{ textAlign: 'center', mb: 1.5 }}><Link to="/forgot-password">Forgot password?</Link></Typography>
       <Typography color="text.secondary" sx={{ textAlign: 'center' }}>New company? <Link to="/register" style={{ fontWeight: 600 }}>Create your workspace</Link></Typography>
     </AuthShell>
   );
 }
+
+function PublicPassword({ mode }: { mode: 'forgot' | 'reset' | 'invite' }) {
+  const token = new URLSearchParams(window.location.search).get('token') ?? '';
+  const [email, setEmail] = useState(''); const [password, setPassword] = useState(''); const [again, setAgain] = useState('');
+  const [done, setDone] = useState(false); const [err, setErr] = useState<string | null>(null); const [busy, setBusy] = useState(false);
+  const forgot = mode === 'forgot';
+  const title = forgot ? 'Forgot your password?' : mode === 'invite' ? 'Accept your invitation' : 'Reset your password';
+  const sub = forgot ? 'Enter your work email and we will send a reset link if an account exists.' : mode === 'invite' ? 'Choose a password to activate your Meridian account.' : 'Choose a new password for your Meridian account.';
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault(); setBusy(true); setErr(null);
+    try {
+      if (forgot) { await post('/auth/forgot-password', { email: email.trim() }); setDone(true); }
+      else { if (password !== again) throw new Error('The passwords do not match'); await post(mode === 'invite' ? '/auth/accept-invitation' : '/auth/reset-password', { token, password }); setDone(true); }
+    } catch (x) { setErr(errMsg(x)); } finally { setBusy(false); }
+  };
+  return <AuthShell title={title} wide={false} sub={sub}>
+    {done ? <><Banner tone="ok">{forgot ? 'If that email is registered, a reset link is on its way. Check your inbox.' : 'Your password is set. You can now sign in.'}</Banner><Typography sx={{ mt: 2, textAlign: 'center' }}><Link to="/login">Go to sign in</Link></Typography></> : <>
+      {err && <Banner tone="bad">{err}</Banner>}
+      <form onSubmit={submit}>
+        {forgot ? <Field label="Work email"><input className="input" type="email" autoComplete="username" value={email} onChange={(e) => setEmail(e.target.value)} required autoFocus /></Field> : <><Field label="New password" hint="At least 12 characters."><input className="input" type="password" autoComplete="new-password" minLength={12} maxLength={128} value={password} onChange={(e) => setPassword(e.target.value)} required autoFocus /></Field><Field label="New password again"><input className="input" type="password" autoComplete="new-password" value={again} onChange={(e) => setAgain(e.target.value)} required /></Field></>}
+        <Submit busy={busy}>{busy ? 'Saving…' : forgot ? 'Email me a reset link' : mode === 'invite' ? 'Accept invitation' : 'Set new password'}</Submit>
+      </form>
+      <Typography sx={{ mt: 2, textAlign: 'center' }}><Link to="/login">Back to sign in</Link></Typography>
+    </>}
+  </AuthShell>;
+}
+export function ForgotPassword() { return <PublicPassword mode="forgot" />; }
+export function ResetPassword() { return <PublicPassword mode="reset" />; }
+export function AcceptInvitation() { return <PublicPassword mode="invite" />; }
 
 export function Register() {
   const { me, refresh } = useSession();
@@ -159,7 +198,7 @@ export function ChangePassword() {
     try { await post('/auth/change-password', { current: cur, next }); await refresh(); nav('/'); } catch (x) { setErr(errMsg(x)); } finally { setBusy(false); }
   };
   return (
-    <AuthShell title="Choose a new password" wide={false} sub={me.user.mustChangePassword ? 'Your administrator gave you a temporary password. Replace it to continue.' : undefined}>
+    <AuthShell title="Choose a new password" wide={false} sub={me.user.mustChangePassword ? 'Choose a password to continue.' : undefined}>
       {err && <Banner tone="bad">{err}</Banner>}
       <form onSubmit={submit}>
         <Field label="Current password"><input className="input" type="password" value={cur} onChange={(e) => setCur(e.target.value)} required autoComplete="current-password" /></Field>

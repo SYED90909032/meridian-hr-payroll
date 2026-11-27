@@ -17,7 +17,11 @@ Open-source people and payroll platform. UAE-first (WPS, GPSSA, gratuity), multi
 | Service | Helpdesk tickets with internal notes, announcements, knowledge base |
 | Assistant | Tool-restricted assistant (fixed tools, pseudonymised people, no pay, bank or ID data ever reaches the model) |
 | Audit | Hash-chained events, Ed25519-sealed Merkle blocks, integrity verification, public key export |
-| Platform | Read-only API keys, signed webhooks with SSRF protection (validated IP is pinned), delivery log, OpenAPI document at `/api/v1/openapi.json` |
+| Platform | API keys (read-only by default; write scopes by explicit opt-in, per-key rate limit and expiry), signed webhooks with SSRF protection and a per-tenant destination allow-list, delivery log with retention, OpenAPI document at `/api/v1/openapi.json`, `packages/sdk` (not published) |
+| Communications | Email and SMS outbox with SMTP, Postmark and Twilio providers, invitations and password reset with single-use tokens, notification preferences, tenant MFA policy |
+| Identity (extended) | WebAuthn passkeys, OIDC single sign-on with group-to-role mapping, SCIM 2.0 provisioning |
+| Documents | Scan-gated (ClamAV), per-employee-encrypted documents in an object store (local or S3-compatible), encrypted payslip archive, quarantine, crypto-erasure that also deletes stored objects |
+| Operations | Redis-backed rate limiting, Prometheus metrics, OpenTelemetry tracing, log redaction, pay-day watchdog, restore drill with audit-chain verification, runbooks in `docs/runbooks/` |
 | Data protection | Per-employee data keys, field encryption, crypto-erasure on termination request |
 
 ## Screenshots
@@ -83,11 +87,11 @@ Generate keys with `openssl rand -base64 32`. Losing `MERIDIAN_MASTER_KEY` makes
 
 ```bash
 pnpm typecheck
-pnpm test                 # engine (33) + API integration (117), against a real PostgreSQL database `meridian_test`
+pnpm test                 # engine (40) + API integration (184), against a real PostgreSQL database `meridian_test`
 pnpm audit --prod
 ```
 
-The API tests need `meridian_test` migrated: `./scripts/db-reset.sh meridian_test`. CI (`.github/workflows/ci.yml`) does the same with a Postgres service.
+The API tests need `meridian_test` migrated: `./scripts/db-reset.sh meridian_test`. They also use Redis, a `moto` S3/KMS stand-in and a ClamAV daemon; tests that need them skip locally when absent and **fail** when `REQUIRE_INFRA=1`. CI (`.github/workflows/ci.yml`) provides Postgres, Redis, moto and ClamAV services and sets `REQUIRE_INFRA=1`.
 
 ### Docker
 
@@ -102,13 +106,14 @@ The API tests need `meridian_test` migrated: `./scripts/db-reset.sh meridian_tes
 5. Have the UAE pack reviewed by a qualified payroll or legal reviewer and validated with your bank's WPS channel before enabling live mode. See [docs/SECURITY.md](docs/SECURITY.md).
 
 ## Known limitations
-
-- Email is not delivered; action tokens and approval links exist but there is no mail provider.
-- No leave proration, no mid-period compensation split, no automatic notice pay, overnight shifts are staged.
-- Contractors are excluded from pay runs.
-- Passkeys, OIDC/SAML, SCIM, MCP OAuth, Drive/SharePoint connectors, mobile apps, talent and rewards modules, countries other than the UAE, the Rust/WASM engine and edge workers are staged in the blueprint, not built.
-- PostgreSQL row-level-security policies have only been reviewed by their author and the test suite. Get an independent review before holding real data.
-
+The authoritative status of every item is `docs/production-readiness-progress.md`; what was built and how is in `CHANGELOG.md`. In short:
+- The UAE pack is still L0. The mechanism that can unlock L2 exists (reviewer sign-off, bank acceptance and two zero-variance parallel runs, enforced by a database trigger) but none of that external evidence exists. Live bank payment stays blocked.
+- No bank has validated the WPS file, and the SFTP transport has only run against an in-process test server.
+- PostgreSQL RLS has not had an independent review (the review pack is in `docs/reviews/`), and no penetration test or SOC 2 audit has happened. The compliance documents in `docs/compliance/` are drafts that no counsel, DPO or auditor has reviewed.
+- Cloud services (KMS, S3, mail providers, identity providers) were tested against stand-ins (`moto`, an in-process SMTP server, a fake OIDC provider, a software passkey authenticator), not the real services.
+- SAML, MCP, Drive/SharePoint connectors, mobile apps, talent and rewards modules, countries other than the UAE, the Rust/WASM engine and edge workers are not built.
+- Contractor payroll and leave encashment exist but are off by default pending reviewer confirmation.
+- The SDK is not published.
 ## Licence
 
 AGPL-3.0-or-later. See `LICENSE`. Architectural decisions are in `docs/adr/`; those marked provisional are assumptions made without an answer from the product owner and are safe to change.

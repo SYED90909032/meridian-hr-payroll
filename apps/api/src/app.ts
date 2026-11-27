@@ -5,9 +5,12 @@ import rateLimit from '@fastify/rate-limit';
 import fastifyStatic from '@fastify/static';
 import { existsSync } from 'node:fs';
 import { timingSafeEqual } from 'node:crypto';
+import Redis from 'ioredis';
 import type { Config } from './config.js';
 import type { Pools } from './db/pool.js';
-import { Kms } from './crypto/kms.js';
+import { createKms } from './crypto/kms.js';
+import { createObjectStore } from './storage/index.js';
+import { createScanner } from './storage/scannerFactory.js';
 import { HttpError } from './errors.js';
 import { principalFromSession, SESSION_COOKIE, type Principal } from './http/principal.js';
 import { permsFor, type Perm } from './http/perms.js';
@@ -23,23 +26,30 @@ import { registerPlatformRoutes } from './modules/platform/routes.js';
 import { registerAuditRoutes } from './modules/audit/routes.js';
 import { registerInsightRoutes } from './modules/insight/routes.js';
 import { registerAssistantRoutes } from './modules/assistant/routes.js';
+import { registerCommsRoutes } from './modules/comms/routes.js';
+import { registerPasskeyRoutes } from './modules/iam/passkeys.js';
+import { registerSsoRoutes } from './modules/iam/sso.js';
+import { registerScimRoutes } from './modules/scim/routes.js';
+import { finishRequestSpan, metrics, metricsContentType, metricsText, routeTemplate, startRequestSpan, updatePoolMetrics } from './observability.js';
 
-declare module 'fastify' { interface FastifyRequest { principal?: Principal | null } }
+declare module 'fastify' { interface FastifyRequest { principal?: Principal | null; meridianSpan?: ReturnType<typeof startRequestSpan>; meridianStartedAt?: bigint } }
 
 const PUBLIC_ERRORS = new Set([400, 401, 403, 404, 409, 410, 413, 415, 422, 429]);
 
 export async function buildApp(cfg: Config, pools: Pools): Promise<{ app: FastifyInstance; svc: Services }> {
+  const redis = cfg.REDIS_URL ? new Redis(cfg.REDIS_URL, { enableOfflineQueue: false, maxRetriesPerRequest: 1 }) : undefined;
   const app = Fastify({
     logger: cfg.NODE_ENV === 'test' && process.env.MERIDIAN_TEST_LOG !== 'on' ? false : {
       level: process.env.LOG_LEVEL ?? 'info',
-      redact: { paths: ['req.headers.authorization', 'req.headers.cookie', 'req.headers["x-api-key"]', 'req.headers["x-device-key"]', 'res.headers["set-cookie"]'], censor: '[redacted]' },
+      redact: { paths: ['req.body', 'req.headers.authorization', 'req.headers.cookie', 'req.headers["x-api-key"]', 'req.headers["x-device-key"]', 'req.headers["x-device-token"]', 'req.headers["x-access-token"]', 'req.headers["set-cookie"]', 'res.headers["set-cookie"]', 'password', '*.password', '*password*', 'secret', '*.secret', '*secret*', 'token', '*.token', '*token*', 'iban', '*.iban', '*iban*', 'nationalId', '*.nationalId', '*national*id*'], censor: '[redacted]' },
     },
     trustProxy: cfg.TRUST_PROXY === 'true',
     bodyLimit: 256 * 1024,
     genReqId: () => crypto.randomUUID(),
     disableRequestLogging: cfg.NODE_ENV === 'test',
   });
-  const svc: Services = { cfg, pools, kms: new Kms(cfg.masterKey), app, routes: [] };
+  const kms = await createKms(cfg);
+  const svc: Services = { cfg, pools, kms, objects: createObjectStore(cfg), scanner: createScanner(cfg), app, routes: [] };
 
   await app.register(helmet, {
     contentSecurityPolicy: { directives: { defaultSrc: ["'self'"], scriptSrc: ["'self'"], styleSrc: ["'self'", "'unsafe-inline'"], imgSrc: ["'self'", 'data:'], connectSrc: ["'self'"],
@@ -49,7 +59,24 @@ export async function buildApp(cfg: Config, pools: Pools): Promise<{ app: Fastif
     hsts: cfg.NODE_ENV === 'production' ? { maxAge: 31536000, includeSubDomains: true } : false,
   });
   await app.register(cookie);
-  await app.register(rateLimit, { global: true, max: 600, timeWindow: '1 minute', allowList: [] });
+  app.addContentTypeParser('application/scim+json', { parseAs: 'string' }, (req, body, done) => {
+    try { done(null, JSON.parse(body as string)); } catch { done(new Error('Invalid JSON')); }
+  });
+  if (redis) redis.on('error', (err) => { metrics.limiterErrors.inc({ backend: 'redis' }); app.log.warn({ err: { message: err.message } }, 'rate limiter Redis unavailable; allowing requests'); });
+  app.addHook('onRequest', async (req) => {
+    req.meridianStartedAt = process.hrtime.bigint();
+    req.meridianSpan = startRequestSpan(req.id, req.method);
+  });
+  app.addHook('onResponse', async (req, reply) => {
+    const route = routeTemplate(req);
+    const statusClass = `${Math.floor(reply.statusCode / 100)}xx`;
+    const seconds = req.meridianStartedAt ? Number(process.hrtime.bigint() - req.meridianStartedAt) / 1e9 : 0;
+    metrics.requests.inc({ route, method: req.method, status_class: statusClass });
+    metrics.latency.observe({ route, method: req.method, status_class: statusClass }, seconds);
+    updatePoolMetrics(pools);
+    if (req.meridianSpan) finishRequestSpan(req.meridianSpan, route, reply.statusCode);
+  });
+  app.addHook('onClose', async () => { if (redis) await redis.quit().catch(() => undefined); });
 
   app.addHook('onSend', async (req, reply) => {
     if (req.url.startsWith('/api/')) { reply.header('Cache-Control', 'no-store'); reply.header('Pragma', 'no-cache'); }
@@ -74,12 +101,24 @@ export async function buildApp(cfg: Config, pools: Pools): Promise<{ app: Fastif
     const deviceKey = req.headers['x-device-key'];
     if (typeof apiKey === 'string') { req.principal = await principalFromApiKey(pools, apiKey); return; }
     if (typeof deviceKey === 'string') { req.principal = await principalFromDeviceKey(pools, deviceKey); return; }
+    const authorization = req.headers.authorization;
+    if (typeof authorization === 'string' && authorization.startsWith('Bearer ')) { req.principal = await principalFromScimToken(pools, authorization.slice(7).trim()); return; }
     const token = req.cookies[SESSION_COOKIE];
     req.principal = await principalFromSession(pools, token, cfg.SESSION_IDLE_MINUTES);
     // Cookie-authenticated mutations must carry our custom header. Browsers will not add it cross-site without a CORS preflight, which we never grant.
-    if (req.principal && ['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method) && req.headers['x-meridian-client'] !== 'web') {
+    if (req.principal?.kind === 'user' && ['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method) && req.headers['x-meridian-client'] !== 'web') {
       throw new HttpError(403, 'csrf', 'Missing client header');
     }
+  });
+  // Run after authentication so API keys get an isolated, creation-time budget. The plugin's
+  // built-in store remains in use; another workstream can replace it with Redis without changing this contract.
+  await app.register(rateLimit, {
+    global: true, hook: 'preHandler', allowList: [],
+    // With REDIS_URL the budget is shared across instances; a Redis outage fails open (and is counted + logged above).
+    ...(redis ? { redis, nameSpace: cfg.RATE_LIMIT_KEY_PREFIX } : {}), skipOnError: Boolean(redis),
+    max: async (req) => (req.principal?.kind === 'apikey' ? req.principal.rateLimitMax ?? 600 : 600),
+    timeWindow: async (req) => (req.principal?.kind === 'apikey' ? (req.principal.rateLimitWindowSeconds ?? 60) * 1000 : 60_000),
+    keyGenerator: (req) => req.principal?.kind === 'apikey' ? `apikey:${req.principal.credentialId}` : req.ip,
   });
 
   app.setErrorHandler((err: Error & { statusCode?: number; code?: string; validation?: unknown }, req, reply) => {
@@ -112,8 +151,20 @@ export async function buildApp(cfg: Config, pools: Pools): Promise<{ app: Fastif
   app.get('/api/v1/health/ready', { config: { rateLimit: false } }, async (_req, reply) => {
     try { await pools.app.query('select 1'); return { status: 'ready' }; } catch { return reply.code(503).send({ status: 'unavailable' }); }
   });
+  app.get('/metrics', { config: { rateLimit: false } }, async (req, reply) => {
+    if (!cfg.METRICS_TOKEN) return reply.code(404).send({ error: 'not_found' });
+    const supplied = req.headers.authorization?.startsWith('Bearer ') ? req.headers.authorization.slice(7) : '';
+    const a = Buffer.from(supplied), b = Buffer.from(cfg.METRICS_TOKEN);
+    if (a.length !== b.length || !timingSafeEqual(a, b)) return reply.code(401).send({ error: 'unauthorized' });
+    reply.type(metricsContentType());
+    return metricsText();
+  });
 
   registerAuthRoutes(svc);
+  registerCommsRoutes(svc);
+  registerPasskeyRoutes(svc);
+  registerSsoRoutes(svc);
+  registerScimRoutes(svc);
   registerPeopleRoutes(svc);
   registerTimeRoutes(svc);
   registerFlowRoutes(svc);
@@ -154,7 +205,7 @@ async function principalFromApiKey(pools: Pools, key: string): Promise<Principal
   const m = /^mk_([a-z0-9]{8})_([A-Za-z0-9_-]{32,64})$/.exec(key);
   if (!m) return null;
   const r = await pools.auth.query(
-    `select k.id, k.tenant_id, k.key_hash, k.scopes, k.expires_at, k.revoked_at, k.created_by,
+    `select k.id, k.tenant_id, k.key_hash, k.scopes, k.expires_at, k.revoked_at, k.created_by, k.allow_write, k.rate_limit_max, k.rate_limit_window_seconds,
             u.email::text as email, u.display_name, u.disabled, m.employee_id, m.status as mstatus,
             coalesce((select array_agg(ra.role) from kernel.role_assignment ra where ra.user_id = k.created_by and ra.tenant_id = k.tenant_id and ra.revoked_at is null), '{}') as roles
        from plat.api_key k join kernel.user_account u on u.id = k.created_by
@@ -169,7 +220,8 @@ async function principalFromApiKey(pools: Pools, key: string): Promise<Principal
   const owned = permsFor(k.roles);
   const perms = new Set<Perm>((k.scopes as Perm[]).filter((s) => owned.has(s)));
   return { kind: 'apikey', userId: k.created_by, tenantId: k.tenant_id, employeeId: k.employee_id ?? null, sessionId: null, email: k.email, displayName: k.display_name,
-    roles: k.roles, perms, mfa: false, totpEnabled: false, stepUpAt: null, mustChangePassword: false, credentialId: k.id };
+    roles: k.roles, perms, mfa: false, totpEnabled: false, stepUpAt: null, mustChangePassword: false, credentialId: k.id,
+    allowWrite: k.allow_write, rateLimitMax: k.rate_limit_max, rateLimitWindowSeconds: k.rate_limit_window_seconds };
 }
 
 async function principalFromDeviceKey(pools: Pools, key: string): Promise<Principal | null> {
@@ -183,6 +235,19 @@ async function principalFromDeviceKey(pools: Pools, key: string): Promise<Princi
   pools.auth.query('update tm.device set last_seen_at = now() where id = $1', [d.id]).catch(() => undefined);
   return { kind: 'device', userId: null, tenantId: d.tenant_id, employeeId: null, sessionId: null, email: '', displayName: 'device', roles: [], perms: new Set<Perm>(),
     mfa: false, totpEnabled: false, stepUpAt: null, mustChangePassword: false, credentialId: d.id, deviceId: d.id };
+}
+
+async function principalFromScimToken(pools: Pools, token: string): Promise<Principal | null> {
+  if (!/^scim_[A-Za-z0-9_-]{32,64}$/.test(token)) return null;
+  const prefix = token.slice(0, 14);
+  const r = await pools.auth.query('select s.id, s.tenant_id, s.token_hash, s.expires_at, s.revoked_at, t.status from kernel.scim_token s join kernel.tenant t on t.id = s.tenant_id where s.token_prefix = $1', [prefix]);
+  const s = r.rows[0];
+  if (!s) return null;
+  const given = sha256(token), have = s.token_hash as Buffer;
+  if (given.length !== have.length || !timingSafeEqual(given, have)) return null;
+  if (s.revoked_at || new Date(s.expires_at).getTime() <= Date.now() || s.status !== 'active') return null;
+  pools.auth.query('update kernel.scim_token set last_used_at = now() where id = $1', [s.id]).catch(() => undefined);
+  return { kind: 'scim', userId: null, tenantId: s.tenant_id, employeeId: null, sessionId: null, email: 'scim', displayName: 'SCIM', roles: [], perms: new Set<Perm>(), mfa: false, totpEnabled: false, stepUpAt: null, mustChangePassword: false, credentialId: s.id };
 }
 
 export type { FastifyRequest };

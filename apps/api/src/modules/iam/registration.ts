@@ -3,6 +3,8 @@ import type { Pools } from '../../db/pool.js';
 import { audit, withTx } from '../../db/tx.js';
 import { hashPassword, passwordProblem } from '../../crypto/password.js';
 import { badRequest, conflict } from '../../errors.js';
+import type { Config } from '../../config.js';
+import { passwordProblemWithBreach } from '../comms/password-security.js';
 
 export interface RegisterInput {
   companyName: string; slug: string; country: string; currency: string;
@@ -16,10 +18,10 @@ const SLUG = /^[a-z0-9][a-z0-9-]{1,40}$/;
  * Creates a user (auth pool), then the tenant and its first owner (app pool, inside the new tenant's context).
  * If the second step fails the user is removed again, so a half-created account never remains.
  */
-export async function registerTenant(pools: Pools, input: RegisterInput, meta: { ip?: string; requestId?: string } = {}): Promise<Registered> {
+export async function registerTenant(pools: Pools, input: RegisterInput, meta: { ip?: string; requestId?: string } = {}, cfg?: Pick<Config, 'HIBP_MODE' | 'HIBP_API_BASE'>, fetcher?: typeof fetch): Promise<Registered> {
   const email = input.email.trim().toLowerCase();
   if (!SLUG.test(input.slug)) throw badRequest('Company URL name may use lowercase letters, digits and hyphens only');
-  const problem = passwordProblem(input.password, email);
+  const problem = cfg ? await passwordProblemWithBreach(input.password, email, cfg, fetcher) : passwordProblem(input.password, email);
   if (problem) throw badRequest(problem);
 
   const exists = await pools.auth.query('select 1 from kernel.user_account where email = $1', [email]);

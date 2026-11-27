@@ -1,18 +1,40 @@
 import { z } from 'zod';
-import { PACK_REGISTRY } from '@meridian/engine';
+import { calculate, PACK_REGISTRY } from '@meridian/engine';
 import { defineRoute, type Services } from '../../http/route.js';
 import { HttpError, badRequest, conflict, forbidden, notFound } from '../../errors.js';
 import { isoDate, pid, short, uuid } from '../../http/schemas.js';
 import { notifyEmployee, notifyRoles, notifyUser } from '../flow/notify.js';
-import { calculateRun, currentResultSetHash, finaliseRun, loadRun, lockInputs, move, packFor } from './service.js';
+import { calculateRun, createReversalRun, currentResultSetHash, finaliseRun, loadRun, lockInputs, move, packFor } from './service.js';
+import { compareParallelRun, explainParallelVariance } from './parallel.js';
+import { queueBankSubmission } from './bank/service.js';
 import { registerPayslipRoutes } from './payslips.js';
 
 const daysBetween = (a: string, b: string): number => Math.round((Date.parse(b + 'T00:00:00Z') - Date.parse(a + 'T00:00:00Z')) / 86_400_000);
 const RUN_COLS = `r.id, r.pay_group_id, g.name as pay_group_name, r.period_start::text, r.period_end::text, r.run_type, r.mode, r.scope_key, r.status, r.pack_id, r.pack_version, r.pack_hash, r.engine_hash,
-  r.input_set_hash, r.result_set_hash, r.bank_file_hash, r.prepared_by, r.created_at, r.locked_at, r.calculated_at, r.finalised_at, r.version`;
+  r.input_set_hash, r.result_set_hash, r.bank_file_hash, r.prepared_by, r.created_at, r.locked_at, r.calculated_at, r.finalised_at, r.version, r.is_reversal, r.reverses_run_id`;
 
 export function registerPayRoutes(svc: Services): void {
-  const { kms } = svc;
+  const { kms, objects } = svc;
+
+  // These switches deliberately default off. Contractor treatment and leave
+  // encashment remain reviewer questions in the L0 pack/review evidence.
+  defineRoute(svc, {
+    method: 'GET', path: '/api/v1/pay/settings', summary: 'Payroll edge-case settings', tag: 'Payroll', auth: 'session', perm: 'pay.view',
+    handler: async ({ db, ctx }) => {
+      const row = (await db.query<{ settings: { payroll?: { contractors_enabled?: boolean; leave_encashment_enabled?: boolean } } }>('select settings from kernel.tenant where id = $1', [ctx.tenantId])).rows[0];
+      const p = row?.settings?.payroll ?? {};
+      return { contractorPayrollEnabled: p.contractors_enabled === true, leaveEncashmentEnabled: p.leave_encashment_enabled === true };
+    },
+  });
+  defineRoute(svc, {
+    method: 'PUT', path: '/api/v1/pay/settings', summary: 'Change payroll edge-case settings', tag: 'Payroll', auth: 'session', perm: 'pay.admin', stepUp: true,
+    body: z.object({ contractorPayrollEnabled: z.boolean(), leaveEncashmentEnabled: z.boolean() }).strict(),
+    handler: async ({ db, ctx, body, audit }) => {
+      await db.query('update kernel.tenant set settings = settings || $2::jsonb where id = $1', [ctx.tenantId, JSON.stringify({ payroll: { contractors_enabled: body.contractorPayrollEnabled, leave_encashment_enabled: body.leaveEncashmentEnabled } })]);
+      await audit('pay.settings_changed', 'tenant', ctx.tenantId, body);
+      return { ok: true };
+    },
+  });
 
   // ---------------------------------------------------------------- packs and groups
   defineRoute(svc, {
@@ -157,6 +179,39 @@ export function registerPayRoutes(svc: Services): void {
     },
   });
 
+  defineRoute(svc, {
+    method: 'GET', path: '/api/v1/pay/employees/:id/termination-settlement-preview', summary: 'Preview termination settlement', tag: 'Payroll', auth: 'session', perm: 'pay.view',
+    handler: async ({ db, ctx, params, audit }) => {
+      const id = pid(params.id);
+      const e = (await db.query<{ hire_date: string; termination_date: string | null; is_uae_national: boolean; employment_type: 'full_time' | 'part_time' | 'contractor'; contract_notice_days: number }>(
+        'select hire_date::text, termination_date::text, is_uae_national, employment_type, contract_notice_days from people.employee where id = $1', [id])).rows[0];
+      if (!e) throw notFound('Employee not found');
+      if (!e.termination_date) throw conflict('The employee has no termination date', 'not_terminated');
+      const term = e.termination_date;
+      const periodStart = `${term.slice(0, 7)}-01`;
+      const periodEnd = new Date(Date.UTC(Number(term.slice(0, 4)), Number(term.slice(5, 7)), 0)).toISOString().slice(0, 10);
+      const payableStart = e.hire_date > periodStart ? e.hire_date : periodStart;
+      const payable = Math.min(30, Math.max(0, daysBetween(payableStart, term) + 1));
+      const c = (await db.query<{ basic_minor: string; housing_minor: string; transport_minor: string; other_minor: string }>(
+        'select basic_minor::text, housing_minor::text, transport_minor::text, other_minor::text from people.compensation where employee_id = $1 and superseded_at is null and valid_during @> $2::date order by recorded_at desc limit 1', [id, term])).rows[0];
+      if (!c) throw new HttpError(422, 'no_compensation', 'No compensation is effective on the termination date');
+      const settings = (await db.query<{ settings: { payroll?: { leave_encashment_enabled?: boolean } } }>('select settings from kernel.tenant where id = $1', [ctx.tenantId])).rows[0]?.settings?.payroll ?? {};
+      const annual = (await db.query<{ balance: string }>(`select coalesce(sum(l.delta_x1000), 0)::text as balance from tm.leave_ledger l join tm.leave_type t on t.id = l.leave_type_id where l.employee_id = $1 and t.code = 'ANNUAL'`, [id])).rows[0]?.balance ?? '0';
+      const pack = PACK_REGISTRY['ae-private-sector'].pack;
+      const basic = Number(c.basic_minor), housing = Number(c.housing_minor), transport = Number(c.transport_minor), other = Number(c.other_minor);
+      const input = {
+        schema: 'payroll.calc.input.v1' as const, run: { type: 'final' as const, mode: 'sandbox' as const }, employee: { id, is_uae_national: e.is_uae_national, employment_type: e.employment_type },
+        period: { start: periodStart, end: periodEnd, days_in_period: daysBetween(periodStart, periodEnd) + 1, days_payable: payable }, comp: { basic, housing, transport, other },
+        ...(payable ? { comp_segments: [{ from: payableStart, to: term, days: payable, basic, housing, transport, other }] } : {}), attendance: { unpaid_leave_days_x1000: 0, overtime_minutes: 0, overtime_special_minutes: 0 },
+        statutory: { contribution_salary_minor: e.is_uae_national ? basic + housing + transport + other : 0 }, adjustments: [], payment_instruction_ref: null,
+        final: { service_days: daysBetween(e.hire_date, term) + 1, leave_balance_days_x1000: Math.max(0, Number(annual)), notice_pay_days_x1000: e.contract_notice_days * 1000, leave_encashment_enabled: settings.leave_encashment_enabled === true },
+      };
+      const result = calculate(input, pack);
+      await audit('termination_settlement.previewed', 'employee', id, { result_hash: result.result_hash, pack: `${pack.source.id}@${pack.source.version}` });
+      return { employeeId: id, terminationDate: term, result, note: 'Preview only. UAE pack is L0 and requires reviewer sign-off.' };
+    },
+  });
+
   const run = async (db: import('../../db/tx.js').Db, id: string | undefined) => loadRun(db, pid(id), true);
   const need = (r: { status: string }, ...ok: string[]) => { if (!ok.includes(r.status)) throw new HttpError(409, 'wrong_state', `This pay run is ${r.status.replace('_', ' ')}. That action is not available now.`); };
 
@@ -255,6 +310,7 @@ export function registerPayRoutes(svc: Services): void {
     handler: async ({ db, params, body, audit }) => {
       const r = await run(db, params.id); need(r, 'draft', 'inputs_locked', 'calculated', 'in_review', 'rejected');
       await move(db, r, 'cancelled', body.reason);
+      await db.query('update pay.adjustment set claimed_by_run_id = null where claimed_by_run_id = $1', [r.id]);
       await audit('pay_run.cancelled', 'pay_run', r.id, { reason: body.reason });
       return { ok: true };
     },
@@ -264,7 +320,7 @@ export function registerPayRoutes(svc: Services): void {
     method: 'POST', path: '/api/v1/pay/runs/:id/finalise', summary: 'Freeze payslips and build the payment file', tag: 'Payroll', auth: 'session', perm: 'pay.admin', stepUp: true, actors: ['payroll'],
     handler: async ({ db, ctx, params, audit }) => {
       const r = await run(db, params.id); need(r, 'approved');
-      const out = await finaliseRun(db, ctx, kms, r);
+      const out = await finaliseRun(db, ctx, kms, objects, r);
       await audit('pay_run.finalised', 'pay_run', r.id, { payslips: out.payslips, payment_rows: out.sifRows, bank_file_hash: out.bankFileHash });
       return out;
     },
@@ -306,14 +362,51 @@ export function registerPayRoutes(svc: Services): void {
     },
   });
   defineRoute(svc, {
+    method: 'POST', path: '/api/v1/pay/parallel-runs', summary: 'Compare a parallel payroll CSV with a Meridian run', tag: 'Payroll', auth: 'session', perm: 'pay.parallel', actors: ['payroll'], idempotent: 'optional',
+    body: z.object({ payRunId: uuid, csv: z.string().min(1).max(512 * 1024) }).strict(),
+    handler: async ({ db, ctx, body, audit }) => {
+      const out = await compareParallelRun(db, ctx.tenantId, ctx.userId!, body.payRunId, body.csv);
+      await audit('parallel_run.compared', 'parallel_run', out.id, { pay_run_id: body.payRunId, status: out.status, employees: out.employees, unexplained: out.unexplained, external_file_hash: out.externalFileHash });
+      return { status: 201, body: out };
+    },
+  });
+  defineRoute(svc, {
+    method: 'GET', path: '/api/v1/pay/parallel-runs/:id', summary: 'View a parallel-run variance report', tag: 'Payroll', auth: 'session', perm: 'pay.parallel',
+    handler: async ({ db, params, audit }) => {
+      const id = pid(params.id);
+      const run = (await db.query('select id, pay_run_id, period_start::text, period_end::text, external_file_hash, status, zero_unexplained, created_by, created_at, completed_at from pay.parallel_run where id = $1', [id])).rows[0];
+      if (!run) throw notFound('Parallel run not found');
+      const employees = (await db.query('select id, employee_id, employee_no, external_gross_minor, external_deductions_minor, external_net_minor, meridian_gross_minor, meridian_deductions_minor, meridian_net_minor, gross_variance_minor, deductions_variance_minor, net_variance_minor, line_differences, status, explanation, explained_by, explained_at from pay.parallel_run_employee where parallel_run_id = $1 order by employee_no', [id])).rows;
+      await audit('parallel_run.report_viewed', 'parallel_run', id, { employees: employees.length });
+      return { run, employees };
+    },
+  });
+  defineRoute(svc, {
+    method: 'POST', path: '/api/v1/pay/parallel-runs/:id/employees/:employeeId/explain', summary: 'Record why a parallel-run variance is accepted', tag: 'Payroll', auth: 'session', perm: 'pay.parallel', stepUp: true, actors: ['payroll'],
+    body: z.object({ reason: z.string().trim().min(5).max(1000) }).strict(),
+    handler: async ({ db, ctx, params, body, audit }) => {
+      await explainParallelVariance(db, ctx.tenantId, ctx.userId!, pid(params.id), uuid.parse(params.employeeId), body.reason);
+      await audit('parallel_run.variance_explained', 'parallel_run', pid(params.id), { employee_id: params.employeeId });
+      return { ok: true };
+    },
+  });
+  defineRoute(svc, {
+    method: 'POST', path: '/api/v1/pay/runs/:id/bank-submit', summary: 'Queue a bank hand-off after payment release', tag: 'Payroll', auth: 'session', perm: 'pay.release', stepUp: true, actors: ['payroll'],
+    handler: async ({ db, ctx, params, audit }) => {
+      const out = await queueBankSubmission(db, ctx.tenantId, ctx.userId!, pid(params.id));
+      await audit('bank_submission.queued', 'pay_run', pid(params.id), { submission_id: out.submissionId, file_hash: out.fileHash });
+      return { status: 202, body: out };
+    },
+  });
+  defineRoute(svc, {
     method: 'POST', path: '/api/v1/pay/runs/:id/reverse', summary: 'Reverse a finalised run. Payslips stay on record; correct with a new run.', tag: 'Payroll', auth: 'session', perm: 'pay.admin', stepUp: true, actors: ['payroll'],
     body: z.object({ reason: z.string().trim().min(10).max(500) }).strict(),
     handler: async ({ db, ctx, params, body, audit }) => {
       const r = await run(db, params.id); need(r, 'finalised', 'payment_released', 'paid', 'published');
-      await move(db, r, 'reversed', body.reason);
+      const reversalRunId = await createReversalRun(db, ctx, r, body.reason);
       await notifyRoles(db, ctx.tenantId, ['owner', 'payroll_approver', 'auditor'], { kind: 'pay.reversed', title: 'Pay run reversed', body: body.reason, link: `/payroll/${r.id}` }, ctx.userId);
-      await audit('pay_run.reversed', 'pay_run', r.id, { reason: body.reason, was: r.status });
-      return { ok: true };
+      await audit('pay_run.reversed', 'pay_run', r.id, { reason: body.reason, was: r.status, reversal_run_id: reversalRunId });
+      return { ok: true, reversalRunId };
     },
   });
 

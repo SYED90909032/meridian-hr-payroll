@@ -20,7 +20,7 @@ Success looks like this:
 2. The v2.1 provisional decisions D1 to D16 stand until you change them. See `docs/adr/`.
 3. First country is UAE (D2). The UAE pack ships at assurance L0, so it can run sandbox and parallel runs only. Live money movement is blocked in code until a pack reaches L2 (D3).
 4. This build uses a local envelope-encryption KMS adapter (master key from the environment). A cloud KMS plugs in behind the same interface (D11 stays open).
-5. Auth is built on vetted primitives (Node scrypt, RFC 6238 TOTP) inside one identity module (D10). Passkeys, OIDC and the MCP OAuth server are staged.
+5. Auth is built on vetted primitives (Node scrypt, RFC 6238 TOTP, WebAuthn and OIDC) inside one identity module (D10). Passkeys, OIDC and inbound SCIM are implemented in Phase 3b; SAML and the MCP OAuth server remain staged.
 6. Cloudflare edge Workers, the Go biometric bridge, the Rust/WASM engine and mobile apps are staged, not built. The engine's input and output contracts are fixed now so the Rust version can replace the TypeScript one and must pass the same golden tests.
 7. UI is a React web app styled with the Spike Admin design system on MUI v7, light and dark mode (ADR-022, supersedes ADR-020).
 
@@ -55,20 +55,20 @@ One Postgres schema per module (`kernel`, `people`, `flow`, `tm`, `pay`, `svc`, 
 Layers, from the outside in:
 
 1. **Edge and transport.** Security headers, strict CSP, no CORS by default, HSTS in production, rate limits on login, ingest and approval endpoints, body size caps.
-2. **Authentication.** scrypt password hashes (N=2^15). Optional TOTP. Lockout with backoff. Sessions are random 256-bit tokens in an httpOnly, SameSite cookie; only the SHA-256 is stored. Step-up auth (password or TOTP re-verification) stamps the session for 10 minutes.
+2. **Authentication.** scrypt password hashes (N=2^15). Optional TOTP, with an opt-in per-tenant enrolment policy for selected roles. Lockout with backoff. Sessions are random 256-bit tokens in an httpOnly, SameSite cookie; only the SHA-256 is stored. Step-up auth (password or TOTP re-verification) stamps the session for 10 minutes. Registration, invitation acceptance, password reset and password change apply local password policy plus a HIBP range check.
 3. **Authorisation, app layer.** Role x scope permission check on every route. Deny by default.
 4. **Authorisation, database.** Two roles: `meridian_auth` (identity tables only) and `meridian_app` (no `BYPASSRLS`, no table ownership). Every tenant table has `FORCE ROW LEVEL SECURITY` with a restrictive tenant wall. Restricted classes (compensation, bank, national ID, payroll results, payslips, confidential tickets, special leave reasons) add scope-read, self-read and scope-write policies through `app.can_see` and `app.can_write`.
 5. **Data at rest.** Bank account and national ID are AES-256-GCM encrypted under a per-subject key wrapped by the tenant key. Blind indexes (HMAC) allow duplicate detection without decrypting. Shredding a subject destroys the wrapped key. Shredding is blocked under a legal hold.
 6. **Integrity.** Audit chain with hash links written in the same transaction. Payroll snapshots, results and payslips are immutable by trigger. Pay-run transitions are enforced by a trigger.
 7. **Approvals.** State changes only via POST. Action tokens are single-use, 15 minutes, bound to approver, step and content hash. Payroll, role and bank approvals require in-app step-up.
-8. **Outbound.** Webhooks signed with HMAC-SHA256, URLs checked by an SSRF guard (blocks private, loopback, link-local and metadata ranges, resolves DNS before connecting, no redirects).
+8. **Outbound.** Webhooks are signed with HMAC-SHA256 and URLs are checked by an SSRF guard (blocks private, loopback, link-local and metadata ranges, resolves DNS before connecting, no redirects). Email and SMS use `email.send`/`sms.send` outbox topics, provider interfaces, dedupe keys, provider message ids and retry/permanent-failure classification. Account links are single-use, expiring and hash-stored; active suppressions are skipped.
 9. **AI.** The assistant sees only pseudonym tokens for people, never raw restricted fields. It can only read through tiered tools and can only draft; a human commits.
 10. **Operations.** No secrets in the repo. Errors never expose stack traces. Logs redact tokens and passwords.
 
 ## 6. Modules and acceptance criteria
 
 ### kernel
-- Register a tenant with an owner; login with password; enrol and verify TOTP; step-up; logout; session revocation.
+- Register a tenant with an owner; login with password; enrol and verify TOTP; step-up; logout; session revocation. Invite a member without returning a temporary password; accept an expiring invitation; request a uniform password reset; reset once and revoke existing sessions.
 - 5 failed logins lock the account for an increasing delay.
 - Cross-tenant read, write and update on every tenant table returns zero rows or an error (test generated from the catalog).
 - Audit chain verifies; tampering with any row is detected by the verifier.
@@ -76,13 +76,15 @@ Layers, from the outside in:
 
 ### people-core
 - CRUD for org units (tree, cycle-proof), employees, employment dates, manager link.
+- Documents are size/type/magic-byte validated, scanned before availability, encrypted with the employee data key and stored through the ObjectStore port. Rows retain plaintext SHA-256 and scan status; downloads require step-up, audit non-self access, and verify GCM plus hash. Scanner errors remain pending and retry via outbox; detections are quarantined and never downloadable.
+- A resumable `docs:migrate-to-store` command dry-runs or scans/read-backs legacy encrypted blobs before nulling their database ciphertext. Erasure deletes/blank references for document, quarantine and payslip objects after the legal-hold gate. Google Drive/SharePoint remain staged pending D-1.
 - Compensation is bitemporal: a correction closes the old row's `recorded_to`; history is never overwritten; overlapping valid periods are rejected by an exclusion constraint.
 - Bank details: encrypted, masked in every response (last four only), duplicate account across employees flagged, change needs step-up and sets a flag that the next pay run reads.
 - National ID: encrypted, only HR/payroll with the class grant can read it, access is audited in the same transaction and fails closed.
 
 ### flow
 - Any module creates an approval request with ordered steps. Approver acts via POST with session. Content change voids pending steps. Token endpoint works only for the bound approver and only once.
-- Inbox lists what is waiting on me. Notifications are created per event.
+- Inbox lists what is waiting on me. Notifications are created per event and eligible transactional email is enqueued in the same transaction. Per-user preferences default on; security mail cannot be disabled.
 
 ### time
 - `POST /ingest/punches` returns 202 with a receipt. The DB dedupes on (tenant, device, idempotency key, event time). Replay returns the same receipt as a duplicate. Events older than 120 days go to a late-punch review queue.
@@ -96,6 +98,9 @@ Layers, from the outside in:
 - Exceptions (missing bank, negative net, bank changed since last run, duplicate bank account, net change over threshold) block approval until resolved or waived with a reason.
 - Approver must differ from preparer and must not be a subject of the run, unless the single-admin exception is active, in which case release is delayed 24 hours and the line is flagged.
 - Finalise makes results immutable, renders each payslip once, hashes it, and builds the WPS SIF file.
+- Live runs need an L2 or higher pack. Promotion to L2/L3 additionally requires an owner-recorded exact-pack sign-off, independent vector-set hash, bank acceptance reference and two qualifying zero-unexplained parallel runs. Sandbox runs can reach `finalised` and `published` but never `payment_released`.
+- Parallel runs import strict integer minor-unit CSV, compare employee totals and supplied lines, and remain blocked until every variance is matched or explained. SIF validation is structural self-checking only; it is not bank acceptance.
+- Finalise makes results immutable, renders each payslip once, hashes it, writes an employee-encrypted object archive and builds the WPS SIF file. Reads verify the archive against the retained hash while the immutable database JSON remains the source of truth.
 - Live runs need an L2 or higher pack. Sandbox runs can reach `finalised` and `published` but never `payment_released`.
 
 ### service
@@ -120,7 +125,7 @@ Never: commit secrets, log sensitive data, trust client-side checks, expose stac
 |---|---|
 | Rust/WASM engine | Needs a Rust toolchain and an independent test-vector set. The TS engine defines the golden vectors it must match. |
 | Cloudflare edge, Go bridge, mobile | Separate runtimes. Ingest contract is fixed and tested. |
-| Passkeys, OIDC, MCP OAuth server | Auth surface. Needs your approval and expert review. |
+| SAML, MCP OAuth server | Auth surface. Needs a vetted implementation, provider review and expert review. |
 | Customer Drive/SharePoint storage | Needs OAuth verification and a Google decision (D-1). Local encrypted storage is used meanwhile. |
 | Live payroll for any country | Needs an L2 pack: a named qualified reviewer, independent vectors and a parallel run. |
 | India pack, other countries | After UAE reaches L2. |

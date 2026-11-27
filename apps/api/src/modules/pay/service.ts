@@ -2,16 +2,18 @@ import { buildSif, calculate, ENGINE_HASH, hashOf, PACK_REGISTRY, sha256Hex, typ
 import type { Ctx, Db } from '../../db/tx.js';
 import type { Kms } from '../../crypto/kms.js';
 import { open } from '../../crypto/kms.js';
+import type { ObjectStore } from '../../storage/objectStore.js';
 import { HttpError, conflict, notFound } from '../../errors.js';
 import { subjectKey } from '../people/lib.js';
 import { tenantTime } from '../time/attendance.js';
 import { buildInputs, LOCK_CODES, type RunRow } from './inputs.js';
+import { archivePayslip } from './archive.js';
 
 export const packFor = (packId: string) => (PACK_REGISTRY as Record<string, { pack: ReturnType<typeof import('@meridian/engine').compilePack>; assurance: string }>)[packId];
 
 export async function loadRun(db: Db, id: string, lock = false): Promise<RunRow> {
   const r = await db.query<RunRow>(`select id, tenant_id, pay_group_id, period_start::text, period_end::text, run_type, mode, scope_key, status, pack_id, pack_version, pack_hash, engine_hash,
-      input_set_hash, result_set_hash, bank_file_hash, prepared_by, input_gen, version from pay.pay_run where id = $1 ${lock ? 'for update' : ''}`, [id]);
+      input_set_hash, result_set_hash, bank_file_hash, prepared_by, input_gen, version, is_reversal, reverses_run_id from pay.pay_run where id = $1 ${lock ? 'for update' : ''}`, [id]);
   if (!r.rows[0]) throw notFound('Pay run not found');
   return r.rows[0];
 }
@@ -28,9 +30,16 @@ export async function move(db: Db, run: RunRow, to: string, reason?: string, ext
 export async function lockInputs(db: Db, ctx: Ctx, run: RunRow): Promise<{ employees: number; exceptions: number }> {
   const tt = await tenantTime(db, ctx.tenantId);
   const { inputs, exceptions } = await buildInputs(db, run, tt);
+  // An unlock starts a new generation. Release only this run's prior claims;
+  // a different locked run remains the owner of its one-off item.
+  await db.query('update pay.adjustment set claimed_by_run_id = null where claimed_by_run_id = $1', [run.id]);
   await db.query(`update pay.payroll_exception set status = 'resolved' where pay_run_id = $1 and status = 'open'`, [run.id]);
   for (const b of inputs) {
     await db.query('insert into pay.payroll_input_snapshot (tenant_id, pay_run_id, employee_id, input, input_hash, gen) values ($1, $2, $3, $4::jsonb, $5, $6)', [ctx.tenantId, run.id, b.employeeId, JSON.stringify(b.input), b.inputHash, run.input_gen]);
+    if (b.adjustmentIds.length) {
+      const claimed = await db.query('update pay.adjustment set claimed_by_run_id = $1 where id = any($2::uuid[]) and claimed_by_run_id is null returning id', [run.id, b.adjustmentIds]);
+      if (claimed.rowCount !== b.adjustmentIds.length) throw conflict('A one-off item was already included in another pay run', 'adjustment_already_claimed');
+    }
   }
   for (const x of exceptions) {
     await db.query('insert into pay.payroll_exception (tenant_id, pay_run_id, employee_id, code, severity, message) values ($1, $2, $3, $4, $5, $6)', [ctx.tenantId, run.id, x.employeeId, x.code, x.severity, x.message]);
@@ -51,7 +60,8 @@ export async function calculateRun(db: Db, ctx: Ctx, run: RunRow): Promise<{ ok:
   let ok = 0, excluded = 0;
   const hashes: [string, string][] = [];
   for (const s of snaps) {
-    const res: PayrollResultV1 = calculate(s.input, reg.pack);
+    const calculated: PayrollResultV1 = calculate(s.input, reg.pack);
+    const res: PayrollResultV1 = run.is_reversal ? compensatingResult(calculated) : calculated;
     await db.query(
       `insert into pay.pay_result (tenant_id, pay_run_id, employee_id, input_hash, engine_hash, pack_hash, result, status, gross_minor, net_minor, result_hash, is_current)
        values ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11, true)
@@ -69,6 +79,24 @@ export async function calculateRun(db: Db, ctx: Ctx, run: RunRow): Promise<{ ok:
   return { ok, excluded, resultSetHash };
 }
 
+/** Reversals keep the original rule ids and explanations and negate every stored line. */
+function compensatingResult(result: PayrollResultV1): PayrollResultV1 {
+  const base = {
+    ...result,
+    lines: result.lines.map((line) => ({ ...line, amount_minor: -line.amount_minor, ...(line.capped_from_minor === undefined ? {} : { capped_from_minor: -line.capped_from_minor }) })),
+    totals: {
+      gross_minor: -result.totals.gross_minor,
+      deductions_minor: -result.totals.deductions_minor,
+      net_minor: -result.totals.net_minor,
+      employer_contributions_minor: -result.totals.employer_contributions_minor,
+      employer_cost_minor: -result.totals.employer_cost_minor,
+      variable_earnings_minor: -result.totals.variable_earnings_minor,
+    },
+    carry_forward: result.carry_forward.map((x) => ({ ...x, amount_minor: -x.amount_minor })),
+  };
+  return { ...base, result_hash: hashOf(base) };
+}
+
 /** The hash that approvers sign. Recomputed from stored rows so that it cannot drift from what they saw. */
 export async function currentResultSetHash(db: Db, run: RunRow): Promise<string> {
   const r = await db.query<{ employee_id: string; result_hash: string }>('select employee_id, result_hash from pay.pay_result where pay_run_id = $1 and is_current order by employee_id', [run.id]);
@@ -76,10 +104,25 @@ export async function currentResultSetHash(db: Db, run: RunRow): Promise<string>
   return hashOf({ run: run.id, gen: run.input_gen, engine: row.rows[0]!.engine_hash, pack: row.rows[0]!.pack_hash, results: r.rows.map((x) => [x.employee_id, x.result_hash]).sort() });
 }
 
+export async function createReversalRun(db: Db, ctx: Ctx, original: RunRow, reason: string): Promise<string> {
+  if (original.is_reversal || original.reverses_run_id) throw conflict('A reversal of a reversal is not allowed', 'reversal_of_reversal');
+  const r = await db.query<{ id: string }>(
+    `insert into pay.pay_run (tenant_id, pay_group_id, period_start, period_end, run_type, mode, scope_key, pack_id, pack_version, pack_hash, prepared_by, reverses_run_id, is_reversal)
+     values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, true) returning id`,
+    [ctx.tenantId, original.pay_group_id, original.period_start, original.period_end, original.run_type, original.mode, `reversal:${original.id}`, original.pack_id, original.pack_version, original.pack_hash, ctx.userId, original.id]);
+  const reversalId = r.rows[0]!.id;
+  await db.query(
+    `insert into pay.payroll_input_snapshot (tenant_id, pay_run_id, employee_id, input, input_hash, gen)
+     select tenant_id, $1, employee_id, input, input_hash, 1 from pay.payroll_input_snapshot where pay_run_id = $2 and gen = $3`,
+    [reversalId, original.id, original.input_gen]);
+  await move(db, original, 'reversed', reason);
+  return reversalId;
+}
+
 export interface FinaliseOutput { payslips: number; sifRows: number; bankFileHash: string | null }
 
 /** Freezes payslips and builds the payment file from the stored results. Everything here reads the current, hash-bound result set. */
-export async function finaliseRun(db: Db, ctx: Ctx, kms: Kms, run: RunRow): Promise<FinaliseOutput> {
+export async function finaliseRun(db: Db, ctx: Ctx, kms: Kms, objects: ObjectStore, run: RunRow): Promise<FinaliseOutput> {
   const grp = (await db.query<{ employer_id: string | null; employer_routing: string | null; currency: string }>('select employer_id, employer_routing, currency from pay.pay_group where id = $1', [run.pay_group_id])).rows[0];
   if (!grp) throw notFound('Pay group not found');
   if (await currentResultSetHash(db, run) !== run.result_set_hash) throw conflict('The results changed after approval. Start the review again.', 'results_changed');
@@ -103,8 +146,14 @@ export async function finaliseRun(db: Db, ctx: Ctx, kms: Kms, run: RunRow): Prom
       totals: { gross_minor: t.gross_minor, deductions_minor: t.deductions_minor, net_minor: t.net_minor },
       provenance: { result_hash: r.result.result_hash, input_hash: r.input_hash, pack: `${r.result.meta.pack_id}@${r.result.meta.pack_version}`, pack_hash: r.result.meta.pack_hash, engine_hash: r.result.meta.engine_hash },
     };
-    await db.query('insert into pay.payslip (tenant_id, pay_run_id, employee_id, template_version, content, content_hash) values ($1, $2, $3, $4, $5::jsonb, $6) on conflict (pay_run_id, employee_id) do nothing',
-      [ctx.tenantId, run.id, r.employee_id, 'payslip.v1', JSON.stringify(content), hashOf(content)]);
+    const contentHash = hashOf(content);
+    const inserted = await db.query<{ id: string; object_key: string | null }>('insert into pay.payslip (tenant_id, pay_run_id, employee_id, template_version, content, content_hash) values ($1, $2, $3, $4, $5::jsonb, $6) on conflict (pay_run_id, employee_id) do nothing returning id, object_key',
+      [ctx.tenantId, run.id, r.employee_id, 'payslip.v1', JSON.stringify(content), contentHash]);
+    const slip = inserted.rows[0] ?? (await db.query<{ id: string; object_key: string | null }>('select id, object_key from pay.payslip where pay_run_id = $1 and employee_id = $2', [run.id, r.employee_id])).rows[0]!;
+    if (!slip.object_key) {
+      const objectKey = await archivePayslip(db, kms, objects, ctx.tenantId, r.employee_id, slip.id, content, contentHash);
+      await db.query("update pay.payslip set object_key = $2, storage_status = 'confirmed' where id = $1", [slip.id, objectKey]);
+    }
     payslips++;
   }
 

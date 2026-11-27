@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
+import { startRegistration } from '@simplewebauthn/browser';
 import QRCode from 'qrcode';
-import { fmtDateTime, get, post } from '../api';
+import { del, fmtDateTime, get, patch, post, put } from '../api';
 import { useMe, useSession } from '../session';
 import { Banner, Card, Chip, ConfirmModal, ErrorBox, Field, FormModal, Loading, Modal, PageHead, Table, useAsync, useToast } from '../ui';
 
@@ -8,6 +9,7 @@ export default function Security() {
   const { refresh } = useSession(); const me = useMe();
   const toast = useToast();
   const sessions = useAsync(() => get<{ sessions: Array<{ id: string; created_at: string; last_seen_at: string; ip: string | null; user_agent: string | null; current: boolean }> }>('/auth/sessions'), []);
+  const preferences = useAsync(() => get<{ preferences: Array<{ kind: string; email_enabled: boolean }>; securityEmailRequired: boolean }>('/comms/notification-preferences'), []);
   const [enrol, setEnrol] = useState(false);
   const [codes, setCodes] = useState<string[] | null>(null);
   const [off, setOff] = useState(false);
@@ -21,8 +23,19 @@ export default function Security() {
         {me.user.totpEnabled ? <button className="btn" onClick={() => setOff(true)}>Turn off</button> : <button className="btn primary" onClick={() => setEnrol(true)}>Set up</button>}
       </Card>
       <div style={{ height: 16 }} />
+      <Passkeys />
+      <div style={{ height: 16 }} />
       <Card title="Password" actions={<button className="btn" onClick={() => setPw(true)}>Change password</button>}>
         <span className="muted">Use at least 12 characters. A long phrase is better than a clever short one. Changing it signs out your other devices.</span>
+      </Card>
+      <div style={{ height: 16 }} />
+      <Card title="Notification emails">
+        <p className="muted">Security messages are always sent. Other transactional email can be adjusted here.</p>
+        {preferences.data?.securityEmailRequired && <p className="muted">Security email cannot be turned off.</p>}
+        {(['leave-requested', 'leave-decided', 'approval-pending', 'pay-run-ready', 'payslip-published'] as const).map((kind) => {
+          const enabled = preferences.data?.preferences.find((x) => x.kind === kind)?.email_enabled ?? true;
+          return <label key={kind} className="check"><input type="checkbox" checked={enabled} onChange={async (e) => { await put('/comms/notification-preferences', { kind, emailEnabled: e.target.checked }); preferences.reload(); }} /> Email: {kind.replaceAll('-', ' ')}</label>;
+        })}
       </Card>
       <div style={{ height: 16 }} />
       <Card title="Where you are signed in" actions={<button className="btn" onClick={() => setOthers(true)}>Sign out everywhere else</button>} flush>
@@ -45,6 +58,27 @@ export default function Security() {
       {others && <ConfirmModal title="Sign out other devices" confirm="Sign out" body="Every session except this one will end." onClose={() => setOthers(false)} onConfirm={async () => { await post('/auth/sessions/revoke-others'); toast('Done'); sessions.reload(); }} />}
     </>
   );
+}
+
+function Passkeys() {
+  const toast = useToast();
+  const keys = useAsync(() => get<{ passkeys: Array<{ id: string; label: string; createdAt: string; lastUsedAt: string | null }> }>('/auth/passkeys'), []);
+  const [busy, setBusy] = useState(false);
+  const add = async () => {
+    setBusy(true);
+    try {
+      const options = await post<Record<string, unknown>>('/auth/passkeys/register/options');
+      const response = await startRegistration({ optionsJSON: options as never });
+      await post('/auth/passkeys/register/verify', { response, label: 'This device' });
+      toast('Passkey added'); keys.reload();
+    } catch (e) { toast(e instanceof Error ? e.message : 'Could not add passkey', true); } finally { setBusy(false); }
+  };
+  return <Card title="Passkeys" actions={<button className="btn primary" disabled={busy} onClick={add}>{busy ? 'Waiting…' : 'Add passkey'}</button>} flush>
+    <p className="muted" style={{ margin: '0 16px 14px' }}>Passkeys use a device unlock or security key. They can sign you in and satisfy step-up checks without sharing a password.</p>
+    {keys.data?.passkeys.length ? <Table head={['Name', 'Added', 'Last used', '']}>
+      {keys.data.passkeys.map((x) => <tr key={x.id}><td><strong>{x.label}</strong></td><td>{fmtDateTime(x.createdAt)}</td><td>{fmtDateTime(x.lastUsedAt)}</td><td className="right nowrap"><button className="btn sm ghost" onClick={async () => { const label = window.prompt('Passkey name', x.label); if (label?.trim()) { await patch(`/auth/passkeys/${x.id}`, { label: label.trim() }); toast('Renamed'); keys.reload(); } }}>Rename</button> <button className="btn sm ghost" onClick={async () => { if (window.confirm('Remove this passkey?')) { await del(`/auth/passkeys/${x.id}`); toast('Removed'); keys.reload(); } }}>Remove</button></td></tr>)}
+    </Table> : <span className="muted" style={{ margin: '0 16px 16px', display: 'block' }}>No passkeys registered yet.</span>}
+  </Card>;
 }
 
 function Enrol({ onClose, onDone }: { onClose: () => void; onDone: (codes: string[]) => void }) {

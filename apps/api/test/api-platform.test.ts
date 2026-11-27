@@ -12,6 +12,7 @@ let b: Booted;
 let t: TestTenant;
 let owner: Actor, hr: Actor, mgr: Actor, emp: Actor, auditor: Actor;
 const publicLookup = async () => [{ address: '93.184.216.34', family: 4 }];
+type SdkClient = { get<T>(path: string): Promise<T> };
 
 beforeAll(async () => {
   b = await boot();
@@ -97,6 +98,18 @@ describe('API keys', () => {
       const a = await k.get('/api/v1/audit/events', { 'x-api-key': r.body.key ?? r.body.secret });
       expect([401, 403]).toContain(a.status);
     }
+  });
+  it('the generated SDK makes a real API-key call over an ephemeral HTTP listener', async () => {
+    await stepUp(b, owner);
+    const made = await owner.client.post('/api/v1/platform/api-keys', { name: 'sdk-reader', scopes: ['people.read'], rate_limit_per_minute: 20 });
+    expect(made.status).toBe(201);
+    const address = await b.app.listen({ port: 0, host: '127.0.0.1' });
+    try {
+      const { ApiClient } = await import(new URL('../../../packages/sdk/src/index.ts', import.meta.url).href) as unknown as { ApiClient: new (options: { baseUrl: string; apiKey?: string }) => SdkClient };
+      const sdk = new ApiClient({ baseUrl: address, apiKey: made.body.key });
+      const result = await sdk.get<{ employees: unknown[] }>('/api/v1/people/employees');
+      expect(Array.isArray(result.employees)).toBe(true);
+    } finally { await new Promise<void>((resolve, reject) => b.app.server.close((err) => err ? reject(err) : resolve())); }
   });
 });
 

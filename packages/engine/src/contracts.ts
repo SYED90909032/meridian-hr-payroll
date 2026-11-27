@@ -27,6 +27,7 @@ export const PayrollCalcInputV1 = z.object({
   employee: z.object({
     id: z.string().min(1).max(64),
     is_uae_national: z.boolean(),
+    employment_type: z.enum(['full_time', 'part_time', 'contractor']).optional(),
   }).strict(),
   period: z.object({
     start: isoDate,
@@ -40,6 +41,16 @@ export const PayrollCalcInputV1 = z.object({
     transport: nonNeg,
     other: nonNeg,
   }).strict(),
+  /** Effective compensation segments. The API builder supplies these for a mid-period change. */
+  comp_segments: z.array(z.object({
+    from: isoDate,
+    to: isoDate,
+    days: int.min(1).max(31),
+    basic: nonNeg,
+    housing: nonNeg,
+    transport: nonNeg,
+    other: nonNeg,
+  }).strict()).max(31).optional(),
   attendance: z.object({
     unpaid_leave_days_x1000: nonNeg,
     overtime_minutes: nonNeg,
@@ -52,6 +63,7 @@ export const PayrollCalcInputV1 = z.object({
     service_days: nonNeg,
     leave_balance_days_x1000: nonNeg,
     notice_pay_days_x1000: nonNeg,
+    leave_encashment_enabled: z.boolean().optional(),
   }).strict().optional(),
   adjustments: z.array(AdjustmentSchema).max(200),
   /** Reference only. Raw bank data never enters the engine. */

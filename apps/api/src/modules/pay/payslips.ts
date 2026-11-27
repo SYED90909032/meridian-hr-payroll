@@ -2,8 +2,10 @@ import { z } from 'zod';
 import { defineRoute, type Services } from '../../http/route.js';
 import { HttpError, forbidden, notFound } from '../../errors.js';
 import { pid } from '../../http/schemas.js';
+import { verifyPayslipArchive } from './archive.js';
 
 export function registerPayslipRoutes(svc: Services): void {
+  const { kms, objects } = svc;
   // ---------------------------------------------------------------- employee self service
   defineRoute(svc, {
     method: 'GET', path: '/api/v1/me/payslips', summary: 'Your published payslips', tag: 'Payslips', auth: 'session',
@@ -17,12 +19,14 @@ export function registerPayslipRoutes(svc: Services): void {
   });
   defineRoute(svc, {
     method: 'GET', path: '/api/v1/me/payslips/:id', summary: 'One of your payslips', tag: 'Payslips', auth: 'session',
-    handler: async ({ db, p, params, audit }) => {
+    handler: async ({ db, p, ctx, params, audit }) => {
       const id = pid(params.id);
-      const r = await db.query('select id, content, content_hash, published_at from pay.payslip where id = $1 and employee_id = $2 and published_at is not null', [id, p.employeeId]);
+      const r = await db.query('select id, employee_id, content, content_hash, object_key, published_at from pay.payslip where id = $1 and employee_id = $2 and published_at is not null', [id, p.employeeId]);
       if (!r.rows[0]) throw notFound('Payslip not found');
+      if (r.rows[0].object_key) await verifyPayslipArchive(db, kms, objects, ctx.tenantId, r.rows[0].employee_id, id, r.rows[0].object_key, r.rows[0].content_hash);
       await audit('payslip.viewed', 'payslip', id, { by: 'employee' });
-      return r.rows[0];
+      const { object_key: _objectKey, employee_id: _employeeId, ...source } = r.rows[0];
+      return source;
     },
   });
 
@@ -38,12 +42,14 @@ export function registerPayslipRoutes(svc: Services): void {
   });
   defineRoute(svc, {
     method: 'GET', path: '/api/v1/pay/payslips/:id', summary: 'Read one payslip (audited)', tag: 'Payroll', auth: 'session', perm: 'pay.view',
-    handler: async ({ db, params, audit }) => {
+    handler: async ({ db, ctx, params, audit }) => {
       const id = pid(params.id);
-      const r = await db.query('select id, employee_id, content, content_hash, published_at from pay.payslip where id = $1', [id]);
+      const r = await db.query('select id, employee_id, content, content_hash, object_key, published_at from pay.payslip where id = $1', [id]);
       if (!r.rows[0]) throw notFound('Payslip not found');
+      if (r.rows[0].object_key) await verifyPayslipArchive(db, kms, objects, ctx.tenantId, r.rows[0].employee_id, id, r.rows[0].object_key, r.rows[0].content_hash);
       await audit('payslip.viewed', 'payslip', id, { by: 'staff', employee_id: r.rows[0].employee_id });
-      return r.rows[0];
+      const { object_key: _objectKey, ...source } = r.rows[0];
+      return source;
     },
   });
 

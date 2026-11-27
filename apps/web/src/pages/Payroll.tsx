@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { del, fmtDate, get, money, post, toMinor } from '../api';
+import { del, fmtDate, get, money, post, put, toMinor } from '../api';
 import { useSession } from '../session';
 import { Banner, Card, Chip, ConfirmModal, Empty, ErrorBox, Field, FormModal, Loading, PageHead, StatusChip, Table, Tabs, useAsync, useToast } from '../ui';
 import { DateInput } from '../DateInput';
@@ -29,7 +29,7 @@ export default function Payroll() {
       {tab === 'runs' && <Runs canPrepare={can('pay.prepare')} />}
       {tab === 'groups' && <Groups canAdmin={can('pay.admin')} packs={packs.data?.packs ?? []} />}
       {tab === 'adjust' && <Adjustments canPrepare={can('pay.prepare')} />}
-      {tab === 'policy' && <Policy canManage={can('settings.manage')} packs={packs.data?.packs ?? []} />}
+      {tab === 'policy' && <Policy canManage={can('settings.manage') || can('pay.admin')} packs={packs.data?.packs ?? []} />}
     </>
   );
 }
@@ -159,6 +159,11 @@ function Policy({ canManage, packs }: { canManage: boolean; packs: Pack[] }) {
   const [ack, setAck] = useState(false);
   const [off, setOff] = useState(false);
   const single = p.data?.exceptions.find((e) => e.kind === 'single_admin' && e.active);
+  const settings = useAsync(() => get<{ contractorPayrollEnabled: boolean; leaveEncashmentEnabled: boolean }>('/pay/settings'), []);
+  const [contractors, setContractors] = useState<boolean | null>(null);
+  const [leaveEncashment, setLeaveEncashment] = useState<boolean | null>(null);
+  const contractorValue = contractors ?? settings.data?.contractorPayrollEnabled ?? false;
+  const leaveValue = leaveEncashment ?? settings.data?.leaveEncashmentEnabled ?? false;
   return (
     <>
       <Card title="Segregation of duties">
@@ -169,6 +174,15 @@ function Policy({ canManage, packs }: { canManage: boolean; packs: Pack[] }) {
             {canManage && <button className="btn" onClick={() => setOff(true)}>Switch off</button>}
           </>
         ) : canManage ? <button className="btn" onClick={() => setOn(true)}>Allow one person to prepare and approve</button> : <Chip tone="ok">Two people required</Chip>}
+      </Card>
+      <div style={{ height: 16 }} />
+      <Card title="Phase 4 controls">
+        <p className="muted" style={{ marginTop: 0 }}>These settings are off by default because contractor treatment and leave encashment remain unreviewed L0 questions.</p>
+        {settings.error ? <ErrorBox error={settings.error} retry={settings.reload} /> : !settings.data ? <Loading /> : <>
+          <label className="check"><input type="checkbox" checked={contractorValue} disabled={!canManage} onChange={(e) => setContractors(e.target.checked)} /> Enable contractor payments (no statutory deductions or gratuity)</label>
+          <label className="check"><input type="checkbox" checked={leaveValue} disabled={!canManage} onChange={(e) => setLeaveEncashment(e.target.checked)} /> Enable leave encashment in final settlements</label>
+          {canManage && <button className="btn primary" style={{ marginTop: 14 }} onClick={async () => { await put('/pay/settings', { contractorPayrollEnabled: contractorValue, leaveEncashmentEnabled: leaveValue }); toast('Payroll settings saved'); settings.reload(); }}>Save Phase 4 settings</button>}
+        </>}
       </Card>
       <div style={{ height: 16 }} />
       <Card title="Rule packs" flush>

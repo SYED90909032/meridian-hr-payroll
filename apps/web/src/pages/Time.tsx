@@ -202,17 +202,20 @@ export function SecretModal({ title, secret, note, onClose }: { title: string; s
 
 function TimeSettings() {
   const toast = useToast();
-  const s = useAsync(() => get<{ tz: string; weekend: number[] }>('/time/settings'), []);
+  const s = useAsync(() => get<{ tz: string; weekend: number[]; overnightBucket: 'start' | 'end' }>('/time/settings'), []);
   const [tz, setTz] = useState<string | null>(null);
   const [wk, setWk] = useState<number[] | null>(null);
+  const [bucket, setBucket] = useState<'start' | 'end' | null>(null);
   if (s.error) return <ErrorBox error={s.error} retry={s.reload} />;
   if (!s.data) return <Loading />;
   const curTz = tz ?? s.data.tz; const curWk = wk ?? s.data.weekend;
+  const curBucket = bucket ?? s.data.overnightBucket;
   return (
     <Card title="Calendar settings">
-      <form onSubmit={async (e) => { e.preventDefault(); try { await put('/time/settings', { tz: curTz, weekend: curWk }); toast('Saved'); s.reload(); } catch (x: any) { toast(x.message, true); } }}>
+      <form onSubmit={async (e) => { e.preventDefault(); try { await put('/time/settings', { tz: curTz, weekend: curWk, overnightBucket: curBucket }); toast('Saved'); s.reload(); } catch (x: any) { toast(x.message, true); } }}>
         <Field label="Time zone" hint="IANA name, for example Asia/Dubai."><input className="input" value={curTz} onChange={(e) => setTz(e.target.value)} required /></Field>
         <Field label="Weekend days"><div className="inline">{DAYS.map((n, i) => <label key={n} className="check"><input type="checkbox" checked={curWk.includes(i)} onChange={(e) => setWk(e.target.checked ? [...curWk, i] : curWk.filter((x) => x !== i))} /> {n}</label>)}</div></Field>
+        <Field label="Overnight shift date" hint="Which local date receives a shift crossing midnight."><select className="input" value={curBucket} onChange={(e) => setBucket(e.target.value as 'start' | 'end')}><option value="start">Shift start date (default)</option><option value="end">Shift end date</option></select></Field>
         <button className="btn primary" disabled={!curWk.length || curWk.length > 3}>Save</button>
       </form>
     </Card>

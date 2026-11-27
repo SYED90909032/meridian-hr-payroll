@@ -18,8 +18,25 @@ jobs:
         ports: ['5432:5432']
         options: >-
           --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping" --health-interval 5s --health-timeout 5s --health-retries 10
+      moto:
+        image: motoserver/moto:latest
+        ports: ['5000:5000']
+      # Real ClamAV daemon: the document-upload tests scan the EICAR string and expect 'quarantined'.
+      clamav:
+        image: clamav/clamav:stable
+        ports: ['3310:3310']
     env:
       PGPASSWORD: postgres
+      REQUIRE_INFRA: '1'
+      REDIS_URL: redis://127.0.0.1:6379
+      MOTO_ENDPOINT: http://127.0.0.1:5000
+      CLAMD_HOST: 127.0.0.1
+      CLAMD_PORT: '3310'
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -28,6 +45,13 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - name: Wait for clamd (signature download can take a minute or two)
+        run: |
+          for i in $(seq 1 60); do
+            if [ "$(printf 'PING\n' | timeout 3 nc 127.0.0.1 3310 2>/dev/null)" = "PONG" ]; then echo ready; exit 0; fi
+            sleep 5
+          done
+          echo "clamd did not become ready"; exit 1
       - name: Create database roles and test database
         run: |
           sed -e "s/CHANGE_ME_owner/owner_dev_pw/; s/CHANGE_ME_app/app_dev_pw/; s/CHANGE_ME_auth/auth_dev_pw/; s/CHANGE_ME_worker/worker_dev_pw/" scripts/db-bootstrap.sql | psql -h localhost -U postgres -v ON_ERROR_STOP=1
@@ -49,7 +73,15 @@ jobs:
         run: pnpm audit --prod
       - run: pnpm test
       - run: pnpm --filter @meridian/web build
+      - name: Web component tests
+        run: pnpm --filter @meridian/web test -- --config vitest.config.ts
       - run: pnpm --filter @meridian/api build
+      - name: Generate CycloneDX SBOM
+        run: pnpm sbom --sbom-format cyclonedx > meridian-sbom.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: meridian-sbom
+          path: meridian-sbom.json
       - name: Secret scan (tracked files)
         run: |
           if git ls-files | xargs grep -nIE 'BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY|ghp_[A-Za-z0-9]{30,}|AKIA[0-9A-Z]{16}'; then echo "possible secret committed"; exit 1; fi
@@ -59,4 +91,52 @@ jobs:
     needs: verify
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: meridian-sbom
       - run: docker build -t meridian:ci .
+      - name: Install cosign on main only
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        uses: sigstore/cosign-installer@v3.7.0
+      - name: Keyless sign and attest on main only
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        run: |
+          cosign sign --yes meridian:ci
+          cosign attest --yes --predicate meridian-sbom.json --type cyclonedx meridian:ci
+
+  e2e:
+    runs-on: ubuntu-latest
+    needs: verify
+    if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Prepare E2E database
+        env:
+          PGPASSWORD: postgres
+        run: |
+          sed -e "s/CHANGE_ME_owner/owner_dev_pw/; s/CHANGE_ME_app/app_dev_pw/; s/CHANGE_ME_auth/auth_dev_pw/; s/CHANGE_ME_worker/worker_dev_pw/" scripts/db-bootstrap.sql | psql -h localhost -U postgres -v ON_ERROR_STOP=1
+          psql -h localhost -U postgres -c "create database meridian_test owner meridian_owner"
+          cat > .testenv <<EOF
+          NODE_ENV=test
+          TEST_DATABASE_URL_OWNER=postgres://meridian_owner:owner_dev_pw@localhost:5432/meridian_test
+          TEST_DATABASE_URL_APP=postgres://meridian_app:app_dev_pw@localhost:5432/meridian_test
+          TEST_DATABASE_URL_AUTH=postgres://meridian_auth:auth_dev_pw@localhost:5432/meridian_test
+          TEST_DATABASE_URL_WORKER=postgres://meridian_worker:worker_dev_pw@localhost:5432/meridian_test
+          EOF
+          cd apps/api && . ../../.testenv && DATABASE_URL_OWNER=$TEST_DATABASE_URL_OWNER pnpm --filter @meridian/api db:migrate
+      - run: pnpm exec playwright install --with-deps chromium
+      - run: apps/web/e2e/run.sh

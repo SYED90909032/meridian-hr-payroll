@@ -1,12 +1,11 @@
 import { z } from 'zod';
-import { randomBytes } from 'node:crypto';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import { defineRoute, type Services } from '../../http/route.js';
 import { SESSION_COOKIE } from '../../http/principal.js';
 import { ROLES } from '../../http/perms.js';
 import { HttpError, badRequest, conflict, forbidden, notFound } from '../../errors.js';
-import { hashPassword, passwordProblem } from '../../crypto/password.js';
 import { registerTenant } from './registration.js';
+import { accountDeepLink, enqueueAccountEmail, issueAccountToken, randomDisabledHash } from './account-recovery.js';
 import * as auth from './auth.js';
 import { audit, withTx } from '../../db/tx.js';
 
@@ -36,7 +35,7 @@ export function registerAuthRoutes(svc: Services): void {
     body: z.object({ companyName: z.string().trim().min(2).max(120), slug: z.string().trim().toLowerCase().min(2).max(41), country: z.string().length(2), currency: z.string().length(3),
       email, displayName: z.string().trim().min(2).max(100), password: z.string().min(1).max(200) }).strict(),
     handler: async ({ body, req, reply }) => {
-      const r = await registerTenant(pools, body, { ip: req.ip, requestId: req.id });
+      const r = await registerTenant(pools, body, { ip: req.ip, requestId: req.id }, cfg);
       const l = await auth.login(pools, kms, cfg, { email: body.email, password: body.password }, req.ip, req.headers['user-agent']);
       setSessionCookie(svc, req, reply, l.token, l.expiresAt);
       return { status: 201, body: { tenantId: r.tenantId, userId: r.userId } };
@@ -87,7 +86,7 @@ export function registerAuthRoutes(svc: Services): void {
   defineRoute(svc, {
     method: 'POST', path: '/api/v1/auth/change-password', summary: 'Change password', tag: 'Auth', auth: 'user', tx: false, rateLimit: { max: 5, timeWindow: '1 minute' },
     body: z.object({ current: z.string().min(1).max(200), next: z.string().min(1).max(200) }).strict(),
-    handler: async ({ p, body }) => { await auth.changePassword(pools, p.userId!, p.sessionId!, body.current, body.next, p.email); return { ok: true }; },
+    handler: async ({ p, body }) => { await auth.changePassword(pools, p.userId!, p.sessionId!, body.current, body.next, p.email, cfg); return { ok: true }; },
   });
 
   defineRoute(svc, {
@@ -142,36 +141,50 @@ export function registerAuthRoutes(svc: Services): void {
   }
 
   defineRoute(svc, {
-    method: 'POST', path: '/api/v1/iam/members', summary: 'Add a person with a one-time temporary password', tag: 'Access', auth: 'session', perm: 'roles.manage', stepUp: true, tx: false,
+    method: 'POST', path: '/api/v1/iam/members', summary: 'Invite a person by email', tag: 'Access', auth: 'session', perm: 'roles.manage', stepUp: true, tx: false,
     body: z.object({ email, displayName: z.string().trim().min(2).max(100), employeeId: uuid.optional(), roles: z.array(roleGrant).max(7).default([]) }).strict(),
     handler: async ({ p, ctx, body }) => {
       checkGrantable(p.roles, body.roles);
-      const temp = randomBytes(12).toString('base64url') + 'aZ';
-      if (passwordProblem(temp)) throw new Error('generated password rejected');
       const exists = await pools.auth.query('select 1 from kernel.user_account where email = $1', [body.email]);
       if (exists.rowCount) throw conflict('That email cannot be added. Ask the person to use another address.', 'email_unavailable');
-      const hash = await hashPassword(temp);
-      const u = await pools.auth.query<{ id: string }>('insert into kernel.user_account (email, password_hash, display_name, must_change_password) values ($1, $2, $3, true) returning id', [body.email, hash, body.displayName]);
+      const u = await pools.auth.query<{ id: string }>('insert into kernel.user_account (email, password_hash, display_name, must_change_password) values ($1, $2, $3, true) returning id', [body.email, randomDisabledHash(), body.displayName]);
       const userId = u.rows[0]!.id;
       try {
+        const invitation = await issueAccountToken(pools.auth, userId, ctx.tenantId, 'invitation', 72 * 3600_000);
         await withTx(pools.app, ctx, async (db) => {
           if (body.employeeId) {
             const e = await db.query('select 1 from people.employee where id = $1', [body.employeeId]);
             if (!e.rowCount) throw badRequest('Employee not found');
           }
-          await db.query('insert into kernel.membership (tenant_id, user_id, employee_id, email, display_name) values ($1, $2, $3, $4, $5)', [ctx.tenantId, userId, body.employeeId ?? null, body.email, body.displayName]);
+          await db.query(`insert into kernel.membership (tenant_id, user_id, employee_id, email, display_name, status) values ($1, $2, $3, $4, $5, 'invited')`, [ctx.tenantId, userId, body.employeeId ?? null, body.email, body.displayName]);
           for (const g of body.roles) {
             const ra = await db.query<{ id: string }>('insert into kernel.role_assignment (tenant_id, user_id, role, granted_by) values ($1, $2, $3, $4) returning id', [ctx.tenantId, userId, g.role, p.userId]);
             await db.query('insert into kernel.role_assignment_scope (tenant_id, assignment_id, scope_type, org_unit_id) values ($1, $2, $3, $4)', [ctx.tenantId, ra.rows[0]!.id, g.scope, g.orgUnitId ?? null]);
           }
+          await enqueueAccountEmail(db, kms, ctx.tenantId, `invitation:${invitation.id}`, body.email, body.displayName, 'invitation.v1', accountDeepLink('invite'), invitation.raw);
           await audit(db, ctx, 'iam.member_added', 'user', userId, { email: body.email, roles: body.roles.map((r) => r.role) });
         }, ['iam']);
       } catch (e) {
         await pools.auth.query('delete from kernel.user_account where id = $1', [userId]).catch(() => undefined);
         throw e;
       }
-      return { status: 201, body: { userId, temporaryPassword: temp, note: 'Shown once. The person must change it at first sign-in.' } };
+      return { status: 201, body: { userId, status: 'invited', delivery: 'email' } };
     },
+  });
+  defineRoute(svc, {
+    method: 'POST', path: '/api/v1/iam/members/:userId/invitation/resend', summary: 'Resend an invitation email', tag: 'Access', auth: 'session', perm: 'roles.manage', stepUp: true, tx: false,
+    handler: async ({ p, ctx, params }) => {
+      const target = uuidOrThrow(params.userId);
+      const m = (await pools.auth.query<{ email: string; display_name: string }>(`select email::text, display_name from kernel.membership where tenant_id = $1 and user_id = $2 and status = 'invited'`, [ctx.tenantId, target])).rows[0];
+      if (!m) throw notFound('Invitation not found');
+      const invitation = await issueAccountToken(pools.auth, target, ctx.tenantId, 'invitation', 72 * 3600_000);
+      await withTx(pools.app, ctx, async (db) => { await enqueueAccountEmail(db, kms, ctx.tenantId, `invitation:${invitation.id}`, m.email, m.display_name, 'invitation.v1', accountDeepLink('invite'), invitation.raw); await audit(db, ctx, 'iam.invitation_resent', 'user', target, {}); });
+      return { ok: true };
+    },
+  });
+  defineRoute(svc, {
+    method: 'POST', path: '/api/v1/iam/members/:userId/invitation/revoke', summary: 'Revoke an invitation', tag: 'Access', auth: 'session', perm: 'roles.manage', stepUp: true, actors: ['iam'],
+    handler: async ({ db, ctx, params, audit: log }) => { const target = uuidOrThrow(params.userId); const r = await db.query(`update kernel.membership set status = 'suspended' where tenant_id = $1 and user_id = $2 and status = 'invited' returning user_id`, [ctx.tenantId, target]); if (!r.rowCount) throw notFound('Invitation not found'); await pools.auth.query(`update kernel.account_token set used_at = now() where user_id = $1 and tenant_id = $2 and purpose = 'invitation' and used_at is null`, [target, ctx.tenantId]); await log('iam.invitation_revoked', 'user', target, {}); return { ok: true }; },
   });
 
   defineRoute(svc, {
