@@ -87,7 +87,7 @@ Generate keys with `openssl rand -base64 32`. Losing `MERIDIAN_MASTER_KEY` makes
 
 ```bash
 pnpm typecheck
-pnpm test                 # engine (40) + API integration (181), against a real PostgreSQL database `meridian_test`
+pnpm test                 # engine (40) + API integration (184), against a real PostgreSQL database `meridian_test`
 pnpm audit --prod
 ```
 

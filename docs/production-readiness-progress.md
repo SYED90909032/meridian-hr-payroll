@@ -108,7 +108,11 @@ The UAE pack is still **L0**. No migration, seed, fixture, script or default set
 | HA database, PITR | Blocked: external | n/a | Needs a managed Postgres account. |
 | Restore drill | Done | PostgreSQL 16 | Positive and negative runs (a tampered copy is detected). Managed PITR not exercised. |
 | Runbooks | Done (drafts) | n/a | `docs/runbooks/`. |
-| Load test and multi-instance topology tests | PENDING_P8 | | |
+| Outbox exactly-once with two workers and lease expiry | Done | PostgreSQL 16 | 200 rows, a killed batch, two concurrent claimers: each row accepted once by an idempotency-keyed provider stand-in (not a real mail vendor). |
+| Concurrent pay-run start and idempotency | Done | PostgreSQL 16, real Fastify | Ten simultaneous starts gave one 201 and nine 409s; ten same-key requests gave one side effect; same key with a different body gave 422. |
+| Load test (1,000 employees) | Done (single sample) | PostgreSQL 16, shared 6-vCPU/24-GB sandbox VM | Calculate 1,925 ms, finalise outputs 4,151 ms, whole lifecycle 12,510 ms, peak RSS 204 MB. Blueprint target is calculation p95 < 30 s; one sample is below it but is not a p95. No bank data seeded (SIF rows 0). Larger tenants and a CPU flame graph are not done. See `docs/runbooks/load-test.md`. |
+| Authenticated browser E2E | Done (Chromium) | local API + Vite preview | Fresh tenant, UI login, dashboard/people/payroll/audit at 375 and 1280 px, no overflow or console errors, logout. 6 Playwright tests pass; WebKit not run for the authenticated path. |
+| Multi-instance deployment topology (2 API + 2 worker behind a balancer) | Blocked: external | n/a | Needs a hosting environment. Redis rate limit and outbox claiming were tested with multiple instances in one machine. |
 | CI changes | Done (partial) | YAML parse, actionlint | Not yet observed running on GitHub Actions. |
 
 ## Phase 8 - AI assistant hardening (ADR-029, ADR-032)
@@ -143,4 +147,4 @@ Business work, not engineering. Nothing here was built. Pricing, multi-cell resi
 
 ## Test totals on the merged branch
 
-PENDING_TOTALS
+API 184 tests (18 files; real PostgreSQL 16, Redis and ClamAV, `moto` for S3 and KMS), engine 40, web component tests 5, Playwright 6. API and web typecheck and build pass. The CLIs `docs:migrate-to-store` (dry run), `keys:init`, `keys:upgrade` and `review:rls` were run against a test database after the merge. Not yet observed: a GitHub Actions run of the extended pipeline.
