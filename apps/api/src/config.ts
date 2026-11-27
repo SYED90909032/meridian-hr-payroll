@@ -37,6 +37,14 @@ const schema = z.object({
   S3_ENDPOINT: z.string().url().optional(),
   S3_FORCE_PATH_STYLE: z.enum(['true', 'false']).default('false'),
   S3_KEY_PREFIX: z.string().optional(),
+  BANK_TRANSPORT: z.enum(['manual', 'sftp']).default('manual'),
+  BANK_SFTP_HOST: z.string().optional(),
+  BANK_SFTP_PORT: z.coerce.number().int().min(1).max(65535).default(22),
+  BANK_SFTP_USERNAME: z.string().optional(),
+  BANK_SFTP_PRIVATE_KEY: z.string().optional(),
+  BANK_SFTP_HOST_KEY_SHA256: z.string().optional(),
+  BANK_SFTP_REMOTE_DIR: z.string().default('/inbound'),
+  BANK_SFTP_TIMEOUT_MS: z.coerce.number().int().min(1000).max(120000).default(15000),
 });
 
 export type Config = z.infer<typeof schema> & { masterKey: Buffer; signingSeed: Buffer };
@@ -53,6 +61,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   if (prod && c.REQUIRE_SECRET_MANAGER === 'true' && c.SECRETS_PROVIDER !== 'aws-secrets-manager') throw new Error('SECRETS_PROVIDER=aws-secrets-manager is required by REQUIRE_SECRET_MANAGER');
   if (prod && c.SECRETS_PROVIDER === 'aws-secrets-manager' && !c.AWS_SECRETS_MANAGER_SECRET_ID) throw new Error('AWS_SECRETS_MANAGER_SECRET_ID is required when using Secrets Manager');
   if (prod && c.SECRETS_PROVIDER !== 'aws-secrets-manager' && c.REQUIRE_SECRET_MANAGER !== 'true') console.warn('Meridian warning: production is using environment-backed long-lived secrets; set REQUIRE_SECRET_MANAGER=true after configuring a secret manager');
+  if (prod && c.BANK_TRANSPORT === 'sftp' && (!c.BANK_SFTP_HOST || !c.BANK_SFTP_USERNAME || !c.BANK_SFTP_PRIVATE_KEY || !c.BANK_SFTP_HOST_KEY_SHA256)) {
+    throw new Error('SFTP bank transport requires host, username, private key, and pinned host key in production');
+  }
   let masterKey: Buffer;
   if (c.MERIDIAN_MASTER_KEY) {
     masterKey = Buffer.from(c.MERIDIAN_MASTER_KEY, 'base64');

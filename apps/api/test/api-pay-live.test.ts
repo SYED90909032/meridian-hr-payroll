@@ -1,11 +1,33 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import pg from 'pg';
+import { randomUUID } from 'node:crypto';
 import { boot, stepUp, type Booted } from './api-helpers.js';
 import { payWorld, runTo, type PayWorld } from './pay-fixtures.js';
+import { withTx } from '../src/db/tx.js';
 
 let b: Booted; let w: PayWorld; let owner: pg.Pool;
 const PACK = 'ae-private-sector';
+let fixtureEvidenceReady = false;
+async function installThrowawayEvidence(): Promise<void> {
+  if (fixtureEvidenceReady) return;
+  const pack = (await owner.query<{ version: string; pack_hash: string }>('select version, pack_hash from pay.pack_registry where pack_id = $1', [PACK])).rows[0]!;
+  const existing = await owner.query('select 1 from pay.pack_signoff where pack_id = $1 and version = $2 and pack_hash = $3', [PACK, pack.version, pack.pack_hash]);
+  if (existing.rowCount) { fixtureEvidenceReady = true; return; }
+  const runs: string[] = [];
+  const parallel: string[] = [];
+  await withTx(b.pools.app, { tenantId: w.t.tenantId, userId: w.owner.userId, employeeId: w.owner.employeeId }, async (db) => {
+    for (const month of ['2027-01', '2027-02']) {
+      const run = (await db.query<{ id: string }>(`insert into pay.pay_run (tenant_id, pay_group_id, period_start, period_end, mode, pack_id, pack_version, pack_hash, prepared_by) values ($1, $2, $3::date, ($3::date + interval '27 days')::date, 'parallel', $4, $5, $6, $7) returning id`, [w.t.tenantId, w.groupId, `${month}-01`, PACK, pack.version, pack.pack_hash, w.owner.userId])).rows[0]!.id;
+      runs.push(run);
+      const p = (await db.query<{ id: string }>(`insert into pay.parallel_run (tenant_id, pay_run_id, period_start, period_end, external_file_hash, status, zero_unexplained, created_by, completed_at) select tenant_id, id, period_start, period_end, $2, 'zero_variance', true, prepared_by, now() from pay.pay_run where id = $1 returning id`, [run, randomUUID().replace(/-/g, '').padEnd(64, '0').slice(0, 64)])).rows[0]!.id;
+      parallel.push(p);
+    }
+  }, ['payroll']);
+  await owner.query(`insert into pay.pack_signoff (pack_id, version, pack_hash, reviewer_name, reviewer_organisation, credential_note, signed_at, scope, document_reference, document_hash, golden_vector_set_hash, bank_wps_acceptance_reference, parallel_run_ids) values ($1,$2,$3,'Test fixture reviewer','Throwaway test organisation','Synthetic fixture only',now(),'Test-only state-machine path','fixture://throwaway',$4,$5,'BANK-FIXTURE',$6::uuid[])`, [PACK, pack.version, pack.pack_hash, 'a'.repeat(64), 'b'.repeat(64), parallel]);
+  fixtureEvidenceReady = true;
+}
 const setAssurance = async (a: 'L0' | 'L2') => {
+  if (a === 'L2') await installThrowawayEvidence();
   await owner.query(`update pay.pack_registry set assurance = $2, reviewer = $3, reviewed_at = $4 where pack_id = $1`, [PACK, a, a === 'L0' ? null : 'Test Reviewer (fixture)', a === 'L0' ? null : new Date()]);
 };
 beforeAll(async () => {

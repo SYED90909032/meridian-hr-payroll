@@ -285,6 +285,16 @@ describe('pay run state machine', () => {
     await owner.query(`insert into pay.pack_registry (pack_id, version, pack_hash, assurance) values ($1, '1', 'hash1', 'L0')`, [packId]);
     await rejects(move(id, 'payment_released', prep, `, bank_file_hash = 'bf1'`), /found L0/);
     await rejects(owner.query(`update pay.pack_registry set assurance = 'L2' where pack_id = $1`, [packId]), /named reviewer/);
+    const evidenceRuns: string[] = [];
+    const evidenceGroup = (await owner.query<{ pay_group_id: string }>('select pay_group_id from pay.pay_run where id = $1', [id])).rows[0]!.pay_group_id;
+    await as(pools, A, prep, async (db) => {
+      for (const month of ['2027-01', '2027-02']) {
+        const ev = await db.query<{ id: string }>(`insert into pay.pay_run (tenant_id, pay_group_id, period_start, period_end, mode, pack_id, pack_version, pack_hash, prepared_by) values ($1, $2, $3::date, ($3::date + interval '27 days')::date, 'parallel', $4, '1', 'hash1', $5) returning id`, [A.tenantId, evidenceGroup, `${month}-01`, packId, prep.userId]);
+        const p = await db.query<{ id: string }>(`insert into pay.parallel_run (tenant_id, pay_run_id, period_start, period_end, external_file_hash, status, zero_unexplained, created_by, completed_at) select tenant_id, id, period_start, period_end, $2, 'zero_variance', true, prepared_by, now() from pay.pay_run where id = $1 returning id`, [ev.rows[0]!.id, randomUUID().replace(/-/g, '').padEnd(64, '0').slice(0, 64)]);
+        evidenceRuns.push(p.rows[0]!.id);
+      }
+    }, ['payroll']);
+    await owner.query(`insert into pay.pack_signoff (pack_id, version, pack_hash, reviewer_name, reviewer_organisation, credential_note, signed_at, scope, document_reference, document_hash, golden_vector_set_hash, bank_wps_acceptance_reference, parallel_run_ids) values ($1,'1','hash1','Test Reviewer','Throwaway test organisation','Synthetic fixture only',now(),'Test-only state-machine path','fixture://throwaway',$2,$3,'BANK-FIXTURE',$4::uuid[])`, [packId, 'a'.repeat(64), 'b'.repeat(64), evidenceRuns]);
     await owner.query(`update pay.pack_registry set assurance = 'L2', reviewer = 'Test Reviewer', reviewed_at = now() where pack_id = $1`, [packId]);
     await rejects(move(id, 'payment_released', prep, `, bank_file_hash = 'bf1'`), /bank file hash does not match/);
     await as(pools, A, prep, (db) => db.query(`insert into pay.payment_file (tenant_id, pay_run_id, format, content, content_hash) values ($1, $2, 'wps_sif', 'x', 'bf1')`, [A.tenantId, id]), ['payroll']);
