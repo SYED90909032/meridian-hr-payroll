@@ -24,6 +24,7 @@ import { registerPlatformRoutes } from './modules/platform/routes.js';
 import { registerAuditRoutes } from './modules/audit/routes.js';
 import { registerInsightRoutes } from './modules/insight/routes.js';
 import { registerAssistantRoutes } from './modules/assistant/routes.js';
+import { registerCommsRoutes } from './modules/comms/routes.js';
 
 declare module 'fastify' { interface FastifyRequest { principal?: Principal | null } }
 
@@ -115,6 +116,7 @@ export async function buildApp(cfg: Config, pools: Pools): Promise<{ app: Fastif
   });
 
   registerAuthRoutes(svc);
+  registerCommsRoutes(svc);
   registerPeopleRoutes(svc);
   registerTimeRoutes(svc);
   registerFlowRoutes(svc);

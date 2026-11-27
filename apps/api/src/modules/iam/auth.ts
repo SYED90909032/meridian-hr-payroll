@@ -7,6 +7,7 @@ import { open, seal } from '../../crypto/kms.js';
 import type { Kms } from '../../crypto/kms.js';
 import type { Config } from '../../config.js';
 import { randomBytes } from 'node:crypto';
+import { passwordProblemWithBreach } from '../comms/password-security.js';
 
 const LOCK_AFTER = 5;
 
@@ -98,10 +99,10 @@ export async function stepUp(pools: Pools, kms: Kms, userId: string, sessionId: 
   await pools.auth.query('update kernel.session set step_up_at = now() where id = $1', [sessionId]);
 }
 
-export async function changePassword(pools: Pools, userId: string, sessionId: string, current: string, next: string, email: string): Promise<void> {
+export async function changePassword(pools: Pools, userId: string, sessionId: string, current: string, next: string, email: string, cfg?: Pick<Config, 'HIBP_MODE' | 'HIBP_API_BASE'>): Promise<void> {
   const r = await pools.auth.query('select password_hash from kernel.user_account where id = $1', [userId]);
   if (!r.rows[0] || !(await verifyPassword(current, r.rows[0].password_hash))) throw new HttpError(401, 'bad_password', 'Current password is not correct');
-  const problem = passwordProblem(next, email);
+  const problem = cfg ? await passwordProblemWithBreach(next, email, cfg) : passwordProblem(next, email);
   if (problem) throw badRequest(problem);
   if (await verifyPassword(next, r.rows[0].password_hash)) throw badRequest('Choose a password you have not used before');
   const hash = await hashPassword(next);
