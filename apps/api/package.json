@@ -15,7 +15,8 @@
     "keys:upgrade": "tsx src/cli/keys.ts upgrade",
     "keys:rotate-tenant": "tsx src/cli/keys.ts rotate-tenant",
     "review:rls": "tsx src/cli/review-rls.ts",
-    "pack:signoff": "tsx src/cli/pack-signoff.ts"
+    "pack:signoff": "tsx src/cli/pack-signoff.ts",
+    "docs:migrate-to-store": "tsx src/modules/people/migrate-to-store.ts"
   },
   "dependencies": {
     "@aws-sdk/client-kms": "^3.1178.0",

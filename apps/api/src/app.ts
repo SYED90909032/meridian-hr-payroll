@@ -9,6 +9,7 @@ import type { Config } from './config.js';
 import type { Pools } from './db/pool.js';
 import { createKms } from './crypto/kms.js';
 import { createObjectStore } from './storage/index.js';
+import { createScanner } from './storage/scannerFactory.js';
 import { HttpError } from './errors.js';
 import { principalFromSession, SESSION_COOKIE, type Principal } from './http/principal.js';
 import { permsFor, type Perm } from './http/perms.js';
@@ -45,7 +46,7 @@ export async function buildApp(cfg: Config, pools: Pools): Promise<{ app: Fastif
     disableRequestLogging: cfg.NODE_ENV === 'test',
   });
   const kms = await createKms(cfg);
-  const svc: Services = { cfg, pools, kms, objects: createObjectStore(cfg), app, routes: [] };
+  const svc: Services = { cfg, pools, kms, objects: createObjectStore(cfg), scanner: createScanner(cfg), app, routes: [] };
 
   await app.register(helmet, {
     contentSecurityPolicy: { directives: { defaultSrc: ["'self'"], scriptSrc: ["'self'"], styleSrc: ["'self'", "'unsafe-inline'"], imgSrc: ["'self'", 'data:'], connectSrc: ["'self'"],

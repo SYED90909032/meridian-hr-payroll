@@ -3,6 +3,9 @@ loadDotEnv();
 const { loadConfig } = await import('./config.js');
 const { createPools } = await import('./db/pool.js');
 const { createKms } = await import('./crypto/kms.js');
+const { createObjectStore } = await import('./storage/index.js');
+const { createScanner } = await import('./storage/scannerFactory.js');
+const { processDocumentScanJob } = await import('./modules/people/scanWorker.js');
 const { deliverChannel } = await import('./modules/platform/delivery.js');
 const { DeliveryError } = await import('./modules/comms/providers.js');
 import type { OutboxRow } from './modules/platform/delivery.js';
@@ -14,6 +17,8 @@ import type { OutboxRow } from './modules/platform/delivery.js';
 const cfg = loadConfig();
 const pools = createPools(cfg);
 const kms = await createKms(cfg);
+const objects = createObjectStore(cfg);
+const scanner = createScanner(cfg);
 let stopping = false;
 let lastRetentionAt = 0;
 const backoff = (attempts: number): number => Math.min(3600, 15 * 2 ** Math.min(attempts, 8));
@@ -25,7 +30,9 @@ export async function tick(): Promise<number> {
   const r = await pools.worker.query<OutboxRow>('select * from kernel.claim_outbox($1, $2)', [25, 60]);
   for (const row of r.rows) {
     try {
-      const providerId = await deliverChannel(pools, kms, cfg, row);
+      const providerId = row.topic === 'document.scan'
+        ? (await processDocumentScanJob(pools, kms, objects, scanner, { ...(row.payload as Record<string, unknown>), tenant_id: row.tenant_id }, cfg.SCAN_MAX_ATTEMPTS), null)
+        : await deliverChannel(pools, kms, cfg, row);
       if (providerId) await pools.worker.query('select kernel.record_outbox_provider($1, $2)', [row.id, providerId]);
       await pools.worker.query('select kernel.finish_outbox($1, true, null, 0)', [row.id]);
     } catch (e) {

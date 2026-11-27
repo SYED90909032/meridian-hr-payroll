@@ -76,6 +76,8 @@ Layers, from the outside in:
 
 ### people-core
 - CRUD for org units (tree, cycle-proof), employees, employment dates, manager link.
+- Documents are size/type/magic-byte validated, scanned before availability, encrypted with the employee data key and stored through the ObjectStore port. Rows retain plaintext SHA-256 and scan status; downloads require step-up, audit non-self access, and verify GCM plus hash. Scanner errors remain pending and retry via outbox; detections are quarantined and never downloadable.
+- A resumable `docs:migrate-to-store` command dry-runs or scans/read-backs legacy encrypted blobs before nulling their database ciphertext. Erasure deletes/blank references for document, quarantine and payslip objects after the legal-hold gate. Google Drive/SharePoint remain staged pending D-1.
 - Compensation is bitemporal: a correction closes the old row's `recorded_to`; history is never overwritten; overlapping valid periods are rejected by an exclusion constraint.
 - Bank details: encrypted, masked in every response (last four only), duplicate account across employees flagged, change needs step-up and sets a flag that the next pay run reads.
 - National ID: encrypted, only HR/payroll with the class grant can read it, access is audited in the same transaction and fails closed.
@@ -98,6 +100,8 @@ Layers, from the outside in:
 - Finalise makes results immutable, renders each payslip once, hashes it, and builds the WPS SIF file.
 - Live runs need an L2 or higher pack. Promotion to L2/L3 additionally requires an owner-recorded exact-pack sign-off, independent vector-set hash, bank acceptance reference and two qualifying zero-unexplained parallel runs. Sandbox runs can reach `finalised` and `published` but never `payment_released`.
 - Parallel runs import strict integer minor-unit CSV, compare employee totals and supplied lines, and remain blocked until every variance is matched or explained. SIF validation is structural self-checking only; it is not bank acceptance.
+- Finalise makes results immutable, renders each payslip once, hashes it, writes an employee-encrypted object archive and builds the WPS SIF file. Reads verify the archive against the retained hash while the immutable database JSON remains the source of truth.
+- Live runs need an L2 or higher pack. Sandbox runs can reach `finalised` and `published` but never `payment_released`.
 
 ### service
 - Helpdesk tickets with categories; confidential tickets visible only to the requester and users holding the confidential class grant. Announcements. Knowledge base articles.

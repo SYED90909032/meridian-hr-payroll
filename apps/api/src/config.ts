@@ -73,6 +73,15 @@ const schema = z.object({
   WEBAUTHN_RP_ID: z.string().min(1).default('localhost'),
   WEBAUTHN_ORIGIN: z.string().url().default('http://localhost:5173'),
   SSO_CALLBACK_URL: z.string().url().default('http://localhost:8080/api/v1/auth/sso/callback'),
+  /** Document scanning is mandatory in production unless the operator makes the exception explicit. */
+  SCANNER: z.enum(['clamd', 'none']).default('none'),
+  CLAMD_HOST: z.string().default('127.0.0.1'),
+  CLAMD_PORT: z.coerce.number().int().min(1).max(65535).default(3310),
+  CLAMD_TIMEOUT_MS: z.coerce.number().int().min(100).max(120000).default(10000),
+  SCANNER_MAX_RESPONSE_BYTES: z.coerce.number().int().min(64).max(65536).default(4096),
+  DOCUMENT_MAX_BYTES: z.coerce.number().int().min(1).max(50 * 1024 * 1024).default(5 * 1024 * 1024),
+  SCAN_MAX_ATTEMPTS: z.coerce.number().int().min(1).max(20).default(5),
+  ALLOW_UNSCANNED_DOCUMENTS: z.enum(['true', 'false']).default('false').transform((v) => v === 'true'),
 });
 
 export type Config = z.infer<typeof schema> & { masterKey: Buffer; signingSeed: Buffer };
