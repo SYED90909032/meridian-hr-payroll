@@ -5,7 +5,7 @@ import type { Perm } from './perms.js';
 import { permsFor } from './perms.js';
 
 export interface Principal {
-  kind: 'user' | 'apikey' | 'device';
+  kind: 'user' | 'apikey' | 'device' | 'scim';
   userId: string | null;
   tenantId: string | null;
   employeeId: string | null;

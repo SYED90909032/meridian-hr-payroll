@@ -6,6 +6,7 @@
  * New: "Create workspace" lets the owner pick a profile picture (stored on this device).
  */
 import { useEffect, useState, type ReactNode } from 'react';
+import { startAuthentication } from '@simplewebauthn/browser';
 import { Link, Navigate, useNavigate } from 'react-router-dom';
 import { Box, Card, Divider, Stack, Typography } from '@mui/material';
 import { ApiError, errMsg, post } from '../api';
@@ -76,6 +77,7 @@ export function Login() {
   const [code, setCode] = useState('');
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [slug, setSlug] = useState('');
   if (me) return <Navigate to={me.user.mustChangePassword ? '/account/password' : '/'} replace />;
   const submit = async (e: React.FormEvent) => {
     e.preventDefault(); setBusy(true); setErr(null);
@@ -85,6 +87,11 @@ export function Login() {
     } catch (x) {
       if (x instanceof ApiError && x.code === 'mfa_required') { setNeedCode(true); setErr(null); } else setErr(errMsg(x));
     } finally { setBusy(false); }
+  };
+  const passkey = async () => {
+    setBusy(true); setErr(null);
+    try { const options = await post<Record<string, unknown>>('/auth/passkey/options', email.trim() ? { email: email.trim() } : {}); const response = await startAuthentication({ optionsJSON: options as never }); await post('/auth/passkey/verify', { response }); await refresh(); nav('/'); }
+    catch (x) { setErr(errMsg(x)); } finally { setBusy(false); }
   };
   return (
     <AuthShell title="Welcome back" sub="Sign in to your Meridian workspace.">
@@ -100,6 +107,8 @@ export function Login() {
         <Submit busy={busy}>{busy ? 'Signing in…' : needCode ? 'Verify and sign in' : 'Sign in'}</Submit>
         {needCode && <button type="button" className="btn ghost sm" style={{ marginTop: 10 }} onClick={() => { setUseRecovery(!useRecovery); setCode(''); }}>{useRecovery ? 'Use authenticator code' : 'Use a recovery code'}</button>}
       </form>
+      <button type="button" className="btn" style={{ width: '100%', marginTop: 12 }} disabled={busy} onClick={passkey}>Sign in with passkey</button>
+      <div className="row" style={{ marginTop: 12 }}><input className="input" aria-label="Company slug for SSO" placeholder="Company slug" value={slug} onChange={(e) => setSlug(e.target.value.toLowerCase())} /><button type="button" className="btn" disabled={!slug || busy} onClick={() => { window.location.href = `/api/v1/auth/sso/${encodeURIComponent(slug)}/start?redirect=/`; }}>Sign in with SSO</button></div>
       <Divider sx={{ my: 3.5 }} />
       <Typography color="text.secondary" sx={{ textAlign: 'center' }}>New company? <Link to="/register" style={{ fontWeight: 600 }}>Create your workspace</Link></Typography>
     </AuthShell>

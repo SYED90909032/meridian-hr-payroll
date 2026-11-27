@@ -92,6 +92,9 @@ importers:
       '@types/ssh2':
         specifier: ^1.15.6
         version: 1.15.6
+      jose:
+        specifier: 6.2.18
+        version: 6.2.18
       smtp-server:
         specifier: ^3.21.7
         version: 3.21.7
@@ -131,6 +134,9 @@ importers:
       '@mui/x-charts':
         specifier: ^8.29.3
         version: 8.29.3(@emotion/react@11.14.0(@types/react@19.3.0)(react@19.3.1))(@emotion/styled@11.14.1(@emotion/react@11.14.0(@types/react@19.3.0)(react@19.3.1))(@types/react@19.3.0)(react@19.3.1))(@mui/material@7.3.11(@emotion/react@11.14.0(@types/react@19.3.0)(react@19.3.1))(@emotion/styled@11.14.1(@emotion/react@11.14.0(@types/react@19.3.0)(react@19.3.1))(@types/react@19.3.0)(react@19.3.1))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1))(@mui/system@7.3.11(@emotion/react@11.14.0(@types/react@19.3.0)(react@19.3.1))(@emotion/styled@11.14.1(@emotion/react@11.14.0(@types/react@19.3.0)(react@19.3.1))(@types/react@19.3.0)(react@19.3.1))(@types/react@19.3.0)(react@19.3.1))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
+      '@simplewebauthn/browser':
+        specifier: ^13.3.0
+        version: 13.3.0
       qrcode:
         specifier: ^1.5.4
         version: 1.5.4
@@ -1542,6 +1548,9 @@ packages:
     resolution: {integrity: sha512-/W1LBsMeQAdiCuH3Z2gkRspl3mlxL+butknhq4vXjmxO45vuT08BqhehxDoE4YS+m6s9lhpq6M9/PjTEAg8PYw==}
     cpu: [x64]
     os: [win32]
+
+  '@simplewebauthn/browser@13.3.0':
+    resolution: {integrity: sha512-BE/UWv6FOToAdVk0EokzkqQQDOWtNydYlY6+OrmiZ5SCNmb41VehttboTetUM3T/fr6EAFYVXjz4My2wg230rQ==}
 
   '@simplewebauthn/server@14.1.0':
     resolution: {integrity: sha512-HPRRBR4Vzr45+RVvbmf6JuCfGdYYcSs4Pnnnp9YSY2IABa4JKnG+wxybczoB7rmdLCOMS/mbBa2ZL/Bcz58UlA==}
@@ -4257,6 +4266,8 @@ snapshots:
 
   '@rollup/rollup-win32-x64-msvc@4.68.8':
     optional: true
+
+  '@simplewebauthn/browser@13.3.0': {}
 
   '@simplewebauthn/server@14.1.0':
     dependencies:

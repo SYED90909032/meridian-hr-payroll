@@ -20,7 +20,7 @@ Success looks like this:
 2. The v2.1 provisional decisions D1 to D16 stand until you change them. See `docs/adr/`.
 3. First country is UAE (D2). The UAE pack ships at assurance L0, so it can run sandbox and parallel runs only. Live money movement is blocked in code until a pack reaches L2 (D3).
 4. This build uses a local envelope-encryption KMS adapter (master key from the environment). A cloud KMS plugs in behind the same interface (D11 stays open).
-5. Auth is built on vetted primitives (Node scrypt, RFC 6238 TOTP) inside one identity module (D10). Passkeys, OIDC and the MCP OAuth server are staged.
+5. Auth is built on vetted primitives (Node scrypt, RFC 6238 TOTP, WebAuthn and OIDC) inside one identity module (D10). Passkeys, OIDC and inbound SCIM are implemented in Phase 3b; SAML and the MCP OAuth server remain staged.
 6. Cloudflare edge Workers, the Go biometric bridge, the Rust/WASM engine and mobile apps are staged, not built. The engine's input and output contracts are fixed now so the Rust version can replace the TypeScript one and must pass the same golden tests.
 7. UI is a React web app styled with the Spike Admin design system on MUI v7, light and dark mode (ADR-022, supersedes ADR-020).
 
@@ -120,7 +120,7 @@ Never: commit secrets, log sensitive data, trust client-side checks, expose stac
 |---|---|
 | Rust/WASM engine | Needs a Rust toolchain and an independent test-vector set. The TS engine defines the golden vectors it must match. |
 | Cloudflare edge, Go bridge, mobile | Separate runtimes. Ingest contract is fixed and tested. |
-| Passkeys, OIDC, MCP OAuth server | Auth surface. Needs your approval and expert review. |
+| SAML, MCP OAuth server | Auth surface. Needs a vetted implementation, provider review and expert review. |
 | Customer Drive/SharePoint storage | Needs OAuth verification and a Google decision (D-1). Local encrypted storage is used meanwhile. |
 | Live payroll for any country | Needs an L2 pack: a named qualified reviewer, independent vectors and a parallel run. |
 | India pack, other countries | After UAE reaches L2. |

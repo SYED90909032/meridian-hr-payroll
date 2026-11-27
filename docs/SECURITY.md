@@ -14,6 +14,9 @@ Report vulnerabilities privately to the repository owner (GitHub private advisor
 - Sessions are opaque random tokens stored hashed, in `HttpOnly` cookies (`Secure` outside development, `SameSite=Lax` by default), with idle (30 min) and absolute (12 h) limits. Sessions can be listed and revoked.
 - TOTP MFA (RFC 6238) with single-use codes inside a time window and 8 hashed recovery codes. Approving and releasing a pay run additionally require MFA to be turned on for the acting user (`requireMfa`).
 - **Step-up:** sensitive actions require a password and MFA re-check within the last 10 minutes. These are: enabling or disabling MFA, adding members and changing roles or status, termination, compensation and bank changes, revealing identity data, erasing personal data, registering or revoking time devices, the single-admin policy, and in payroll waiving exceptions, approve, reject, finalise, release, mark-paid, reverse and the bank-file download, plus creating API keys and webhooks and sealing the audit log. The API answers `401 step_up_required` and the web app opens a dialog and retries.
+- Passkeys use `@simplewebauthn/server`/`@simplewebauthn/browser` with configured RP ID/origin, required user verification, five-minute session-bound challenges, atomic single use, counter regression/clone rejection and audit events. A passkey is MFA-strength for sign-in and step-up; tests use a software authenticator only.
+- OIDC SSO uses `openid-client` discovery, guarded endpoint fetches, state/nonce/PKCE records with five-minute expiry and single use, JWKS-backed signature validation, issuer/audience/expiry checks and mandatory `email_verified`. JIT provisioning is off by default, limited to a tenant default role or explicit owner mapping, and post-login redirects are local paths only. Client secrets are sealed with the tenant key.
+- SCIM uses tenant-scoped bearer tokens stored only as hashes. The SCIM route kind is separate from user sessions; identity lookup/create, session revocation and API-key revocation run through `meridian_auth`. Tenant transactions use membership rows only and do not grant `meridian_app` access to `kernel.user_account`.
 
 **CSRF and cross-site requests.** Cookie-authenticated mutations must carry `X-Meridian-Client: web` and an `Origin` matching the host. API keys are read-only and cannot mutate.
 
@@ -63,7 +66,7 @@ Every pay line carries the rule id and an explanation (the Explain drawer in the
 - **Email enumeration:** adding a member whose email exists returns `409 email_unavailable`. Registration and login do not reveal existence.
 - **No email delivery**, so password resets and invitation links are not sent; temporary passwords are shown once to the administrator who creates the account.
 - **`payment_file`** is readable by anyone holding the pay-read class at the database layer. The API route is gated, step-up protected and audited, but a database-level reader could see it.
-- **No SSO/OIDC, SCIM, passkeys** yet. MFA is TOTP only.
+- **External identity assurance remains an operator responsibility.** SSO has not been run against a real Okta, Entra or Google tenant; SCIM tests are synthetic client requests; passkeys have not been tested with hardware or a browser platform authenticator. Before staging use, verify exact redirect URI registration, issuer/domain policy, group mappings, SCIM token rotation and IdP offboarding behavior. IdP compromise, mis-mapped groups, JIT policy errors and SCIM token theft remain residual risks.
 - **No penetration test, no SOC 2 or ISO 27001 evidence, no DPA or privacy review.** These are organisational work, not code.
 - **Supply chain:** `pnpm audit --prod` is clean at the time of writing and runs in CI. Dependencies are pinned by lockfile.
 
