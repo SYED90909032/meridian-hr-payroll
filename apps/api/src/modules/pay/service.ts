@@ -2,10 +2,12 @@ import { buildSif, calculate, ENGINE_HASH, hashOf, PACK_REGISTRY, sha256Hex, typ
 import type { Ctx, Db } from '../../db/tx.js';
 import type { Kms } from '../../crypto/kms.js';
 import { open } from '../../crypto/kms.js';
+import type { ObjectStore } from '../../storage/objectStore.js';
 import { HttpError, conflict, notFound } from '../../errors.js';
 import { subjectKey } from '../people/lib.js';
 import { tenantTime } from '../time/attendance.js';
 import { buildInputs, LOCK_CODES, type RunRow } from './inputs.js';
+import { archivePayslip } from './archive.js';
 
 export const packFor = (packId: string) => (PACK_REGISTRY as Record<string, { pack: ReturnType<typeof import('@meridian/engine').compilePack>; assurance: string }>)[packId];
 
@@ -79,7 +81,7 @@ export async function currentResultSetHash(db: Db, run: RunRow): Promise<string>
 export interface FinaliseOutput { payslips: number; sifRows: number; bankFileHash: string | null }
 
 /** Freezes payslips and builds the payment file from the stored results. Everything here reads the current, hash-bound result set. */
-export async function finaliseRun(db: Db, ctx: Ctx, kms: Kms, run: RunRow): Promise<FinaliseOutput> {
+export async function finaliseRun(db: Db, ctx: Ctx, kms: Kms, objects: ObjectStore, run: RunRow): Promise<FinaliseOutput> {
   const grp = (await db.query<{ employer_id: string | null; employer_routing: string | null; currency: string }>('select employer_id, employer_routing, currency from pay.pay_group where id = $1', [run.pay_group_id])).rows[0];
   if (!grp) throw notFound('Pay group not found');
   if (await currentResultSetHash(db, run) !== run.result_set_hash) throw conflict('The results changed after approval. Start the review again.', 'results_changed');
@@ -103,8 +105,14 @@ export async function finaliseRun(db: Db, ctx: Ctx, kms: Kms, run: RunRow): Prom
       totals: { gross_minor: t.gross_minor, deductions_minor: t.deductions_minor, net_minor: t.net_minor },
       provenance: { result_hash: r.result.result_hash, input_hash: r.input_hash, pack: `${r.result.meta.pack_id}@${r.result.meta.pack_version}`, pack_hash: r.result.meta.pack_hash, engine_hash: r.result.meta.engine_hash },
     };
-    await db.query('insert into pay.payslip (tenant_id, pay_run_id, employee_id, template_version, content, content_hash) values ($1, $2, $3, $4, $5::jsonb, $6) on conflict (pay_run_id, employee_id) do nothing',
-      [ctx.tenantId, run.id, r.employee_id, 'payslip.v1', JSON.stringify(content), hashOf(content)]);
+    const contentHash = hashOf(content);
+    const inserted = await db.query<{ id: string; object_key: string | null }>('insert into pay.payslip (tenant_id, pay_run_id, employee_id, template_version, content, content_hash) values ($1, $2, $3, $4, $5::jsonb, $6) on conflict (pay_run_id, employee_id) do nothing returning id, object_key',
+      [ctx.tenantId, run.id, r.employee_id, 'payslip.v1', JSON.stringify(content), contentHash]);
+    const slip = inserted.rows[0] ?? (await db.query<{ id: string; object_key: string | null }>('select id, object_key from pay.payslip where pay_run_id = $1 and employee_id = $2', [run.id, r.employee_id])).rows[0]!;
+    if (!slip.object_key) {
+      const objectKey = await archivePayslip(db, kms, objects, ctx.tenantId, r.employee_id, slip.id, content, contentHash);
+      await db.query("update pay.payslip set object_key = $2, storage_status = 'confirmed' where id = $1", [slip.id, objectKey]);
+    }
     payslips++;
   }
 

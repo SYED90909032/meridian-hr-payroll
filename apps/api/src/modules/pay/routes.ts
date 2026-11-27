@@ -12,7 +12,7 @@ const RUN_COLS = `r.id, r.pay_group_id, g.name as pay_group_name, r.period_start
   r.input_set_hash, r.result_set_hash, r.bank_file_hash, r.prepared_by, r.created_at, r.locked_at, r.calculated_at, r.finalised_at, r.version`;
 
 export function registerPayRoutes(svc: Services): void {
-  const { kms } = svc;
+  const { kms, objects } = svc;
 
   // ---------------------------------------------------------------- packs and groups
   defineRoute(svc, {
@@ -264,7 +264,7 @@ export function registerPayRoutes(svc: Services): void {
     method: 'POST', path: '/api/v1/pay/runs/:id/finalise', summary: 'Freeze payslips and build the payment file', tag: 'Payroll', auth: 'session', perm: 'pay.admin', stepUp: true, actors: ['payroll'],
     handler: async ({ db, ctx, params, audit }) => {
       const r = await run(db, params.id); need(r, 'approved');
-      const out = await finaliseRun(db, ctx, kms, r);
+      const out = await finaliseRun(db, ctx, kms, objects, r);
       await audit('pay_run.finalised', 'pay_run', r.id, { payslips: out.payslips, payment_rows: out.sifRows, bank_file_hash: out.bankFileHash });
       return out;
     },

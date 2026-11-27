@@ -5,13 +5,14 @@ import type { Config } from '../config.js';
 import type { Pools } from '../db/pool.js';
 import type { Kms } from '../crypto/kms.js';
 import type { ObjectStore } from '../storage/objectStore.js';
+import type { Scanner } from '../storage/scanner.js';
 import { audit, emit, withTx, type Ctx, type Db, type SystemActor } from '../db/tx.js';
 import { HttpError, badRequest, forbidden, unauthorized } from '../errors.js';
 import { sha256hex } from '../crypto/tokens.js';
 import type { Perm } from './perms.js';
 import type { Principal } from './principal.js';
 
-export interface Services { cfg: Config; pools: Pools; kms: Kms; objects: ObjectStore; app: FastifyInstance; routes: RouteMeta[] }
+export interface Services { cfg: Config; pools: Pools; kms: Kms; objects: ObjectStore; scanner: Scanner; app: FastifyInstance; routes: RouteMeta[] }
 
 export interface RouteMeta {
   method: string; path: string; summary: string; tag: string; auth: AuthKind; perm?: Perm; stepUp: boolean;

@@ -204,7 +204,7 @@ function BankModal({ id, onClose, onDone }: { id: string; onClose: () => void; o
 }
 
 function DocsTab({ id, canWrite }: { id: string; canWrite: boolean }) {
-  const l = useAsync(() => get<{ documents: Array<{ id: string; kind: string; name: string; mime: string; size_bytes: number; created_at: string }> }>(`/people/employees/${id}/documents`), [id]);
+  const l = useAsync(() => get<{ documents: Array<{ id: string; kind: string; name: string; mime: string; size_bytes: number; status: 'pending_scan' | 'available' | 'quarantined' | 'scan_failed'; scan_signature?: string | null; created_at: string }> }>(`/people/employees/${id}/documents`), [id]);
   const file = useRef<HTMLInputElement>(null);
   const [kind, setKind] = useState('contract');
   const [busy, setBusy] = useState(false);
@@ -217,8 +217,8 @@ function DocsTab({ id, canWrite }: { id: string; canWrite: boolean }) {
       if (!['application/pdf', 'image/png', 'image/jpeg', 'text/plain'].includes(mime)) throw new Error('Use a PDF, PNG, JPEG or plain text file');
       const buf = new Uint8Array(await f.arrayBuffer());
       let bin = ''; for (let i = 0; i < buf.length; i += 0x8000) bin += String.fromCharCode(...buf.subarray(i, i + 0x8000));
-      await post(`/people/employees/${id}/documents`, { kind, name: f.name.replace(/[\\/\x00-\x1f]/g, '_'), mime, contentBase64: btoa(bin) });
-      toast('Document uploaded and encrypted'); l.reload();
+      const r = await post<{ status: string; message?: string }>(`/people/employees/${id}/documents`, { kind, name: f.name.replace(/[\\/\x00-\x1f]/g, '_'), mime, contentBase64: btoa(bin) });
+      toast(r.status === 'available' ? 'Document scanned, encrypted and stored' : r.message ?? 'Document is awaiting malware scanning', r.status === 'quarantined'); l.reload();
     } catch (x) { toast(errMsg(x), true); } finally { setBusy(false); if (file.current) file.current.value = ''; }
   };
   return (
@@ -228,10 +228,10 @@ function DocsTab({ id, canWrite }: { id: string; canWrite: boolean }) {
       <input ref={file} type="file" hidden accept=".pdf,.png,.jpg,.jpeg,.txt" onChange={(e) => e.target.files?.[0] && upload(e.target.files[0])} />
     </>} flush>
       {l.loading ? <Loading /> : l.data && l.data.documents.length ? (
-        <Table head={['Name', 'Type', 'Size', 'Added', '']}>
+        <Table head={['Name', 'Type', 'Scan status', 'Size', 'Added', '']}>
           {l.data.documents.map((d) => (
-            <tr key={d.id}><td>{d.name}</td><td>{d.kind.replace('_', ' ')}</td><td>{(d.size_bytes / 1024).toFixed(0)} KB</td><td>{fmtDate(d.created_at)}</td>
-              <td className="right"><button className="btn sm" onClick={() => download(`/people/documents/${d.id}`, d.name).catch((x) => toast(errMsg(x), true))}>Download</button></td></tr>
+            <tr key={d.id}><td style={{ overflowWrap: 'anywhere' }}>{d.name}</td><td>{d.kind.replace('_', ' ')}</td><td>{d.status === 'quarantined' ? <Chip tone="bad">Quarantined{d.scan_signature ? ` · ${d.scan_signature}` : ''}</Chip> : d.status === 'scan_failed' ? <Chip tone="bad">Scan failed</Chip> : d.status === 'pending_scan' ? <Chip tone="warn">Scanning</Chip> : <Chip tone="ok">Available</Chip>}</td><td>{(d.size_bytes / 1024).toFixed(0)} KB</td><td>{fmtDate(d.created_at)}</td>
+              <td className="right">{d.status === 'available' ? <button className="btn sm" onClick={() => download(`/people/documents/${d.id}`, d.name).catch((x) => toast(errMsg(x), true))}>Download</button> : <span className="faint">{d.status === 'quarantined' ? 'Blocked by scanner' : d.status === 'scan_failed' ? 'Unavailable' : 'Not ready'}</span>}</td></tr>
           ))}
         </Table>
       ) : <Empty title="No documents">Files are checked against their type, encrypted, and every download is audited.</Empty>}

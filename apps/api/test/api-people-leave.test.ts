@@ -1,10 +1,17 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { actor, boot, mkTenant, ownerOf, stepUp, type Actor, type Booted } from './api-helpers.js';
-import type { TestTenant } from './helpers.js';
+import { as, cfg, type TestTenant } from './helpers.js';
+import { createObjectStore } from '../src/storage/index.js';
+import { randomUUID } from 'node:crypto';
+import { Kms, seal } from '../src/crypto/kms.js';
+import { subjectKey } from '../src/modules/people/lib.js';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 
 let b: Booted;
 let t: TestTenant;
 let owner: Actor, hr: Actor, mgr: Actor, emp: Actor, other: Actor, helpdesk: Actor, auditor: Actor;
+const execFileAsync = promisify(execFile);
 
 function nextWeekday(offsetDays: number): string {
   const d = new Date(Date.now() + offsetDays * 86400_000);
@@ -90,6 +97,53 @@ describe('documents', () => {
     const list = await hr.client.get(`/api/v1/people/employees/${id}/documents`);
     expect(list.status).toBe(200);
     expect(JSON.stringify(list.body)).toContain('contract.pdf');
+    expect(list.body.documents[0].status).toBe('available');
+    await stepUp(b, hr);
+    const downloaded = await hr.client.get(`/api/v1/people/documents/${list.body.documents[0].id}`);
+    expect(downloaded.status).toBe(200);
+    expect(downloaded.body).toContain('%PDF-1.4');
+    const key = (await as(b.pools, t, { userId: hr.userId, employeeId: hr.employeeId }, async (db) => (await db.query('select object_key from people.document where id = $1', [list.body.documents[0].id])).rows[0].object_key)) as string;
+    await createObjectStore(cfg()).put(key, Buffer.from('tampered'));
+    await stepUp(b, hr);
+    const tampered = await hr.client.get(`/api/v1/people/documents/${list.body.documents[0].id}`);
+    expect(tampered.status).toBe(422);
+    expect(tampered.body.error.code).toBe('integrity_error');
+  });
+  it('quarantines the harmless EICAR test signature and never makes it downloadable', async () => {
+    const eicar = Buffer.from(['X5O!P%@AP[4', String.fromCharCode(92), 'PZX54(P^)7CC)7}$', 'EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*'].join(''));
+    const r = await hr.client.post(`/api/v1/people/employees/${emp.employeeId}/documents`, { kind: 'other', name: 'scan.txt', mime: 'text/plain', contentBase64: eicar.toString('base64') });
+    expect(r.status, JSON.stringify(r.body)).toBe(201);
+    expect(r.body.status).toBe('quarantined');
+    const list = await hr.client.get(`/api/v1/people/employees/${emp.employeeId}/documents`);
+    const q = list.body.documents.find((x: { id: string }) => x.id === r.body.id);
+    expect(q.status).toBe('quarantined');
+    expect(q.scan_signature).toBe('Eicar-Test-Signature');
+    await stepUp(b, hr);
+    expect((await hr.client.get(`/api/v1/people/documents/${r.body.id}`)).status).toBe(410);
+  });
+  it('migrates a legacy DB document to the object store and preserves download bytes', async () => {
+    const e = await hr.client.post('/api/v1/people/employees', { firstName: 'Legacy', lastName: 'Archive', hireDate: '2024-01-01' });
+    const employeeId = e.body.id as string;
+    const documentId = randomUUID();
+    const bytes = Buffer.from('%PDF-1.4\nlegacy archive\n%%EOF');
+    await as(b.pools, t, { userId: hr.userId, employeeId: hr.employeeId }, async (db) => {
+      const key = (await subjectKey(db, new Kms(cfg().masterKey), t.tenantId, employeeId, true))!;
+      await db.query('insert into people.document (id, tenant_id, employee_id, kind, name, mime, size_bytes, sha256, content_enc, created_by) values ($1,$2,$3,$4,$5,$6,$7,encode(sha256($8),\'hex\'),$9,$10)', [documentId, t.tenantId, employeeId, 'contract', 'legacy.pdf', 'application/pdf', bytes.length, bytes, seal(key, bytes, `${employeeId}:doc:${documentId}`), hr.userId]);
+    });
+    const env = { ...process.env, DATABASE_URL_OWNER: process.env.TEST_DATABASE_URL_OWNER ?? process.env.DATABASE_URL_OWNER, DATABASE_URL_APP: process.env.TEST_DATABASE_URL_APP ?? process.env.DATABASE_URL_APP, DATABASE_URL_AUTH: process.env.TEST_DATABASE_URL_AUTH ?? process.env.DATABASE_URL_AUTH, DATABASE_URL_WORKER: process.env.TEST_DATABASE_URL_WORKER ?? process.env.DATABASE_URL_WORKER, MERIDIAN_MASTER_KEY: cfg().masterKey.toString('base64'), SCANNER: 'clamd', CLAMD_HOST: '127.0.0.1', CLAMD_PORT: '3310' };
+    await execFileAsync('pnpm', ['docs:migrate-to-store'], { cwd: process.cwd(), env, timeout: 60_000 });
+    const migrated = await as(b.pools, t, { userId: hr.userId, employeeId: hr.employeeId }, async (db) => (await db.query('select object_key, content_enc, status from people.document where id = $1', [documentId])).rows[0]);
+    expect(migrated.status).toBe('available');
+    expect(migrated.object_key).toContain(documentId);
+    expect(migrated.content_enc).toBeNull();
+    await stepUp(b, hr);
+    const downloaded = await b.app.inject({
+      method: 'GET',
+      url: `/api/v1/people/documents/${documentId}`,
+      headers: { cookie: hr.client.cookie!, 'x-meridian-client': 'web' },
+    });
+    expect(downloaded.statusCode).toBe(200);
+    expect(downloaded.rawPayload).toEqual(bytes);
   });
   it('rejects path-like file names', async () => {
     const r = await hr.client.post(`/api/v1/people/employees/${emp.employeeId}/documents`, { kind: 'other', name: '../../etc/passwd', mime: 'text/plain', contentBase64: Buffer.from('x').toString('base64') });
@@ -118,6 +172,51 @@ describe('erasure', () => {
     const live = await hr.client.post('/api/v1/people/employees', { firstName: 'Live', lastName: 'One', hireDate: '2025-01-01' });
     await stepUp(b, owner);
     expect((await owner.client.post(`/api/v1/people/employees/${live.body.id}/erase-personal-data`, { confirm: 'ERASE' })).status).toBe(409);
+  });
+  it('deletes encrypted document objects and blanks references during erasure', async () => {
+    const e = await hr.client.post('/api/v1/people/employees', { firstName: 'Object', lastName: 'Gone', hireDate: '2024-01-01' });
+    const id = e.body.id as string;
+    const pdf = Buffer.from('%PDF-1.4\nerasure object\n%%EOF');
+    const upload = await hr.client.post(`/api/v1/people/employees/${id}/documents`, { kind: 'contract', name: 'erase.pdf', mime: 'application/pdf', contentBase64: pdf.toString('base64') });
+    expect(upload.status).toBe(201);
+    const objectKeyRow = await as(b.pools, t, { userId: hr.userId, employeeId: hr.employeeId }, async (db) => (await db.query<{ object_key: string }>('select object_key from people.document where id = $1', [upload.body.id])).rows[0]);
+    if (!objectKeyRow) throw new Error('uploaded document row missing');
+    const objectKey = objectKeyRow.object_key;
+    expect(await createObjectStore(cfg()).head(objectKey)).not.toBeNull();
+    await stepUp(b, hr);
+    expect((await hr.client.post(`/api/v1/people/employees/${id}/terminate`, { terminationDate: '2024-06-30', reason: 'Resigned' })).status).toBe(200);
+    await stepUp(b, owner);
+    expect((await owner.client.post(`/api/v1/people/employees/${id}/erase-personal-data`, { confirm: 'ERASE' })).status).toBe(200);
+    expect(await createObjectStore(cfg()).get(objectKey)).toBeNull();
+    const after = await as(b.pools, t, { userId: hr.userId, employeeId: hr.employeeId }, async (db) => (await db.query<{ object_key: string | null; content_enc: Buffer | null; status: string }>('select object_key, content_enc, status from people.document where id = $1', [upload.body.id])).rows[0]);
+    if (!after) throw new Error('erased document row missing');
+    expect(after.object_key).toBeNull();
+    expect(after.content_enc).toBeNull();
+    expect(after.status).toBe('scan_failed');
+  });
+  it('refuses erasure under legal hold and leaves document objects intact', async () => {
+    const e = await hr.client.post('/api/v1/people/employees', { firstName: 'Held', lastName: 'Archive', hireDate: '2024-01-01' });
+    const id = e.body.id as string;
+    const pdf = Buffer.from('%PDF-1.4\nheld object\n%%EOF');
+    const upload = await hr.client.post(`/api/v1/people/employees/${id}/documents`, { kind: 'contract', name: 'held.pdf', mime: 'application/pdf', contentBase64: pdf.toString('base64') });
+    expect(upload.status).toBe(201);
+    const objectKeyRow = await as(b.pools, t, { userId: hr.userId, employeeId: hr.employeeId }, async (db) => (await db.query<{ object_key: string }>('select object_key from people.document where id = $1', [upload.body.id])).rows[0]);
+    if (!objectKeyRow) throw new Error('uploaded document row missing');
+    const objectKey = objectKeyRow.object_key;
+    await stepUp(b, hr);
+    expect((await hr.client.post(`/api/v1/people/employees/${id}/terminate`, { terminationDate: '2024-06-30', reason: 'Resigned' })).status).toBe(200);
+    await as(b.pools, t, { userId: hr.userId, employeeId: hr.employeeId }, async (db) => {
+      await db.query('insert into kernel.legal_hold (tenant_id, subject_id, reason, created_by) values ($1, $2, $3, $4)', [t.tenantId, id, 'active review', hr.userId]);
+    }, ['hr']);
+    await stepUp(b, owner);
+    const refused = await owner.client.post(`/api/v1/people/employees/${id}/erase-personal-data`, { confirm: 'ERASE' });
+    expect(refused.status).toBe(409);
+    expect(refused.body.error.code).toBe('legal_hold');
+    expect(await createObjectStore(cfg()).head(objectKey)).not.toBeNull();
+    const held = await as(b.pools, t, { userId: hr.userId, employeeId: hr.employeeId }, async (db) => (await db.query<{ object_key: string | null; status: string }>('select object_key, status from people.document where id = $1', [upload.body.id])).rows[0]);
+    if (!held) throw new Error('held document row missing');
+    expect(held.object_key).toBe(objectKey);
+    expect(held.status).toBe('available');
   });
 });
 
