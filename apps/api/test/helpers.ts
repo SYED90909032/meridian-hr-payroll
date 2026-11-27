@@ -4,7 +4,8 @@ import { loadConfig } from '../src/config.js';
 import { registerTenant, type Registered } from '../src/modules/iam/registration.js';
 import { withTx, type Db } from '../src/db/tx.js';
 
-export const cfg = () => loadConfig(process.env);
+// Tests exercise the real document scanner (ClamAV on 127.0.0.1:3310) unless the environment says otherwise.
+export const cfg = () => loadConfig({ SCANNER: 'clamd', CLAMD_HOST: '127.0.0.1', CLAMD_PORT: '3310', ...process.env });
 export const mkPools = (): Pools => createPools(cfg());
 
 export interface TestTenant extends Registered { slug: string; email: string }
