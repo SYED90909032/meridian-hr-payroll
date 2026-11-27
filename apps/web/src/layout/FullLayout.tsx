@@ -29,6 +29,7 @@ export function FullLayout() {
   useEffect(() => { try { localStorage.setItem(MINI_KEY, mini ? '1' : '0'); } catch { /* ignore */ } }, [mini]);
   useEffect(() => { window.scrollTo({ top: 0 }); }, [pathname]);
   const counts = useAsync(() => get<{ my_pending_approvals: number; unread_notifications: number }>('/insight/overview').catch(() => ({ my_pending_approvals: 0, unread_notifications: 0 })), [me?.user.id]);
+  const mfaPolicy = useAsync(() => get<{ requiredRoles: string[] }>('/iam/mfa-policy').catch(() => ({ requiredRoles: [] })), [me?.user.id, me?.tenant?.id]);
 
   if (!me) return <Navigate to="/login" replace />;
   if (me.user.mustChangePassword) return <Navigate to="/account/password" replace />;
@@ -38,6 +39,7 @@ export function FullLayout() {
   const role = me.roles.length ? me.roles.map((r) => r.replace(/_/g, ' ')).join(', ') : 'Employee';
   const out = async () => { await signOut(); nav('/login'); };
   const needs2fa = !me.user.totpEnabled && (can('pay.approve') || can('roles.manage') || can('pay.prepare') || me.roles.includes('owner'));
+  const policyNeeds2fa = !me.user.totpEnabled && (mfaPolicy.data?.requiredRoles ?? []).some((r) => me.roles.includes(r));
   const onMenu = () => { if (window.matchMedia('(min-width: 1200px)').matches) setMini((m) => !m); else setMobileOpen(true); };
 
   return (
@@ -52,6 +54,11 @@ export function FullLayout() {
               sx={{ mb: 3.75, bgcolor: 'warning.light', color: (t) => t.tokens.onTint.warning, '& .MuiAlert-icon': { color: 'warning.main' }, '& .MuiAlert-message': { flex: 1 } }}
               action={<Button component={Link} to="/settings/security" variant="contained" size="small" sx={{ bgcolor: (t) => t.tokens.onTint.warning, color: '#fff', whiteSpace: 'nowrap', '&:hover': { bgcolor: 'warning.dark' } }}>Set up now</Button>}>
               Your role handles sensitive data. Turn on two-step verification.
+            </Alert>
+          )}
+          {policyNeeds2fa && !needs2fa && (
+            <Alert severity="warning" className="no-print" icon={<SolarIcon icon="solar:shield-warning-line-duotone" size={24} />} sx={{ mb: 3.75 }} action={<Button component={Link} to="/settings/security" variant="contained" size="small">Set up now</Button>}>
+              Your company requires two-step verification for your role before you can continue.
             </Alert>
           )}
           <Suspense fallback={<Loading />}><Outlet /></Suspense>

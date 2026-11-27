@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import QRCode from 'qrcode';
-import { fmtDateTime, get, post } from '../api';
+import { fmtDateTime, get, post, put } from '../api';
 import { useMe, useSession } from '../session';
 import { Banner, Card, Chip, ConfirmModal, ErrorBox, Field, FormModal, Loading, Modal, PageHead, Table, useAsync, useToast } from '../ui';
 
@@ -8,6 +8,7 @@ export default function Security() {
   const { refresh } = useSession(); const me = useMe();
   const toast = useToast();
   const sessions = useAsync(() => get<{ sessions: Array<{ id: string; created_at: string; last_seen_at: string; ip: string | null; user_agent: string | null; current: boolean }> }>('/auth/sessions'), []);
+  const preferences = useAsync(() => get<{ preferences: Array<{ kind: string; email_enabled: boolean }>; securityEmailRequired: boolean }>('/comms/notification-preferences'), []);
   const [enrol, setEnrol] = useState(false);
   const [codes, setCodes] = useState<string[] | null>(null);
   const [off, setOff] = useState(false);
@@ -23,6 +24,15 @@ export default function Security() {
       <div style={{ height: 16 }} />
       <Card title="Password" actions={<button className="btn" onClick={() => setPw(true)}>Change password</button>}>
         <span className="muted">Use at least 12 characters. A long phrase is better than a clever short one. Changing it signs out your other devices.</span>
+      </Card>
+      <div style={{ height: 16 }} />
+      <Card title="Notification emails">
+        <p className="muted">Security messages are always sent. Other transactional email can be adjusted here.</p>
+        {preferences.data?.securityEmailRequired && <p className="muted">Security email cannot be turned off.</p>}
+        {(['leave-requested', 'leave-decided', 'approval-pending', 'pay-run-ready', 'payslip-published'] as const).map((kind) => {
+          const enabled = preferences.data?.preferences.find((x) => x.kind === kind)?.email_enabled ?? true;
+          return <label key={kind} className="check"><input type="checkbox" checked={enabled} onChange={async (e) => { await put('/comms/notification-preferences', { kind, emailEnabled: e.target.checked }); preferences.reload(); }} /> Email: {kind.replaceAll('-', ' ')}</label>;
+        })}
       </Card>
       <div style={{ height: 16 }} />
       <Card title="Where you are signed in" actions={<button className="btn" onClick={() => setOthers(true)}>Sign out everywhere else</button>} flush>

@@ -73,6 +73,11 @@ export function defineRoute<B extends ZodTypeAny = ZodTypeAny, Q extends ZodType
         if ((def.auth === 'session' || def.auth === 'any') && !p.tenantId) throw new HttpError(409, 'tenant_required', 'Choose a company first');
         if (p.kind === 'apikey' && def.method !== 'GET' && (!p.allowWrite || !def.perm || !p.perms.has(def.perm))) throw forbidden('This API key is not authorised for writes');
         if (p.mustChangePassword && !def.path.startsWith('/api/v1/auth/')) throw new HttpError(403, 'password_change_required', 'Change your password to continue');
+        if (p.kind === 'user' && p.tenantId && !p.totpEnabled && !['/api/v1/auth/me', '/api/v1/auth/logout', '/api/v1/auth/step-up'].includes(def.path) && !def.path.startsWith('/api/v1/auth/mfa/')) {
+          const policy = await svc.pools.auth.query<{ required_roles: string[] }>('select required_roles from kernel.tenant_mfa_policy where tenant_id = $1', [p.tenantId]);
+          const required = policy.rows[0]?.required_roles ?? [];
+          if (required.some((role) => p.roles.includes(role))) throw new HttpError(403, 'mfa_enrollment_required', 'Enrol two-step verification before using this company');
+        }
       }
       // 2. Authorisation
       if (def.perm && (!p || !p.perms.has(def.perm))) throw forbidden();

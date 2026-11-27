@@ -14,6 +14,7 @@ Report vulnerabilities privately to the repository owner (GitHub private advisor
 - Sessions are opaque random tokens stored hashed, in `HttpOnly` cookies (`Secure` outside development, `SameSite=Lax` by default), with idle (30 min) and absolute (12 h) limits. Sessions can be listed and revoked.
 - TOTP MFA (RFC 6238) with single-use codes inside a time window and 8 hashed recovery codes. Approving and releasing a pay run additionally require MFA to be turned on for the acting user (`requireMfa`).
 - **Step-up:** sensitive actions require a password and MFA re-check within the last 10 minutes. These are: enabling or disabling MFA, adding members and changing roles or status, termination, compensation and bank changes, revealing identity data, erasing personal data, registering or revoking time devices, the single-admin policy, and in payroll waiving exceptions, approve, reject, finalise, release, mark-paid, reverse and the bank-file download, plus creating API keys and webhooks and sealing the audit log. The API answers `401 step_up_required` and the web app opens a dialog and retries.
+- **Account lifecycle:** invitations and password resets use purpose-bound, expiring random tokens. Only SHA-256 token digests are stored; an atomic update makes each token single-use. Password validation includes the local policy and an HIBP k-anonymity range lookup (only five SHA-1 prefix characters leave the process). Resets revoke existing sessions and never auto-login the user. A tenant may require MFA enrolment for selected roles; API-key principals are not subject to that enrolment gate.
 
 **CSRF and cross-site requests.** Cookie-authenticated mutations must carry `X-Meridian-Client: web` and an `Origin` matching the host. API keys are read-only by default; only explicitly opted-in keys may carry the small `people.write`/`leave.admin` allow-list, and API keys can never use step-up routes.
 
@@ -26,6 +27,7 @@ Report vulnerabilities privately to the repository owner (GitHub private advisor
 **Audit.** Mutations and reveals write an event with a hash that includes the previous hash; the application role can only append (update and delete are denied, and a test proves it). On demand (Audit log, Seal now, or the API) the chain is sealed into a Merkle block signed with Ed25519 (`MERIDIAN_SIGNING_KEY`). `GET /audit/verify` recomputes the chain and verifies signatures; the public key is downloadable so an external party can verify independently. Tampering with a row is detected at the exact sequence number (tested).
 
 **Outbound requests (webhooks).** An owner-managed tenant destination allow-list, when present, is checked both at endpoint creation and every delivery. The destination is resolved, every resolved address is checked against private, loopback, link-local, metadata and reserved ranges, and the connection is pinned to the validated address so DNS rebinding cannot swap it. Redirects are not followed. Payloads are signed with HMAC-SHA256 using a per-webhook secret that is displayed once.
+**Outbound requests (webhooks and communications).** Webhook destinations are resolved, checked against private, loopback, link-local, metadata and reserved ranges, and pinned so DNS rebinding cannot swap them; redirects are not followed. Email/SMS delivery runs from the outbox through provider interfaces with provider message ids, dedupe keys and transient/permanent failure classification. Account-link raw tokens are encrypted in outbox payloads and never logged. Bounce/complaint webhooks require the configured secret and create tenant-scoped hashed suppressions; suppressed recipients are skipped.
 
 **Assistant firewall.** The assistant can only call a fixed list of read tools. People are replaced with pseudonyms before anything leaves the process; pay, bank and identity fields are never available to the tools. Model calls require owner consent, an allow-listed model, request caps and DLP scrubbing. Tool results and user text are treated as data. If no model endpoint is configured or consent is off, answers are produced directly from tool output.
 
@@ -60,8 +62,8 @@ Every pay line carries the rule id and an explanation (the Explain drawer in the
 
 - **RLS review.** One recursion bug in a policy was found and fixed during development (migration 012). An independent PostgreSQL security review is still needed.
 - **Master key** is an environment variable (ADR-011, open decision D11). A cloud KMS or HSM adapter is the intended next step; until then, protect the process environment and rotate on staff change.
-- **Email enumeration:** adding a member whose email exists returns `409 email_unavailable`. Registration and login do not reveal existence.
-- **No email delivery**, so password resets and invitation links are not sent; temporary passwords are shown once to the administrator who creates the account.
+- **Email enumeration:** adding a member whose email exists returns `409 email_unavailable`. Registration, forgot-password and login do not reveal existence.
+- **Provider and deliverability evidence:** no real provider or mailbox has been exercised by the repository tests. Operators must configure the provider and publish SPF, DKIM and DMARC records; see `docs/runbooks/email-deliverability.md`.
 - **`payment_file`** is readable by anyone holding the pay-read class at the database layer. The API route is gated, step-up protected and audited, but a database-level reader could see it.
 - **No SSO/OIDC, SCIM, passkeys** yet. MFA is TOTP only.
 - **No penetration test, no SOC 2 or ISO 27001 evidence, no DPA or privacy review.** These are organisational work, not code.
@@ -70,7 +72,7 @@ Every pay line carries the rule id and an explanation (the Explain drawer in the
 ## 4. Verification you can run
 
 ```bash
-pnpm test              # 33 engine + 117 API integration tests (real PostgreSQL)
+pnpm test              # engine + API tests (real PostgreSQL; see the workstream report for the exact run)
 pnpm audit --prod
 curl -s localhost:8080/api/v1/openapi.json | jq '.paths | length'
 ```

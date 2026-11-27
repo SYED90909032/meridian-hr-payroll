@@ -22,7 +22,7 @@ Browser to API (cookies, CSRF) / API to database (three least-privilege roles, r
 
 | # | Threat | Control | Evidence | Residual risk |
 | --- | --- | --- | --- | --- |
-| T1 | Credential stuffing or password guessing | scrypt, lockout with back-off, per-route rate limits, uniform timing for unknown emails | `api-auth.test.ts` | No breached-password check; no CAPTCHA |
+| T1 | Credential stuffing or password guessing | scrypt, lockout with back-off, per-route rate limits, uniform timing for unknown emails, local common-password floor and HIBP range k-anonymity on registration/invite/reset/change | `api-auth.test.ts`, `comms.test.ts` | HIBP availability policy is configurable; CAPTCHA is an optional hook and real provider behavior is not tested |
 | T2 | Session theft | HttpOnly, Secure, SameSite cookies; hashed tokens at rest; idle and absolute expiry; revoke list | `api-auth.test.ts` | Token theft from a compromised browser still works until expiry. No device binding |
 | T3 | CSRF | Origin check and custom header on cookie mutations; SameSite=Lax; API keys cannot mutate | `api-auth.test.ts` | Relies on browsers sending Origin |
 | T4 | XSS | React escaping, strict CSP (`script-src 'self'`, no inline script), no `dangerouslySetInnerHTML`, user text rendered as text | CSP header checked in production boot | `style-src 'unsafe-inline'` is allowed for React inline styles |
@@ -40,10 +40,11 @@ Browser to API (cookies, CSRF) / API to database (three least-privilege roles, r
 | T16 | Denial of service | Rate limits, body size limits, zod collection limits (zod upgraded after an advisory), pagination caps | route tests | No WAF; payroll calculation is synchronous in the request |
 | T17 | Insider at operator level reads data | Field encryption, audit of reveals | partial | Operator who also holds the master key sees everything. Needs KMS with separation of duties |
 | T18 | Wrong payroll maths (a correctness threat) | Integer-only arithmetic, rule packs with assurance levels, live payment blocked below L2, explanations per line, exceptions instead of silent clamping | `packages/engine` (33 tests) | **UAE pack is L0.** See SECURITY.md, Payroll assumptions |
+| T19 | Invitation/reset token theft, replay or email-provider abuse | Raw account tokens are random, purpose-bound, expiring and stored only as SHA-256 digests; atomic consume is single-use; reset revokes sessions; outbox dedupe stores provider ids; bounce/complaint events create hashed suppressions; provider secrets are configuration-only | `comms.test.ts`; `docs/runbooks/email-deliverability.md` | A compromised mailbox or provider account can still expose a live link; DNS reputation and provider security remain external controls |
 
 ## 5. Not modelled yet
 
-Physical and cloud account security of whoever hosts it; organisational controls (joiner/mover/leaver, key ceremony, incident response); tenant-supplied files (virus scanning is not implemented for documents); SSO account takeover paths (no SSO yet); mobile clients (not built).
+Physical and cloud account security of whoever hosts it; organisational controls (joiner/mover/leaver, key ceremony, incident response); tenant-supplied files (virus scanning is not implemented for documents); mailbox/provider compromise and DNS reputation; SSO account takeover paths (no SSO yet); mobile clients (not built).
 
 ## 6. Review plan before real data
 

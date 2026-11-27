@@ -55,20 +55,20 @@ One Postgres schema per module (`kernel`, `people`, `flow`, `tm`, `pay`, `svc`, 
 Layers, from the outside in:
 
 1. **Edge and transport.** Security headers, strict CSP, no CORS by default, HSTS in production, rate limits on login, ingest and approval endpoints, body size caps.
-2. **Authentication.** scrypt password hashes (N=2^15). Optional TOTP. Lockout with backoff. Sessions are random 256-bit tokens in an httpOnly, SameSite cookie; only the SHA-256 is stored. Step-up auth (password or TOTP re-verification) stamps the session for 10 minutes.
+2. **Authentication.** scrypt password hashes (N=2^15). Optional TOTP, with an opt-in per-tenant enrolment policy for selected roles. Lockout with backoff. Sessions are random 256-bit tokens in an httpOnly, SameSite cookie; only the SHA-256 is stored. Step-up auth (password or TOTP re-verification) stamps the session for 10 minutes. Registration, invitation acceptance, password reset and password change apply local password policy plus a HIBP range check.
 3. **Authorisation, app layer.** Role x scope permission check on every route. Deny by default.
 4. **Authorisation, database.** Two roles: `meridian_auth` (identity tables only) and `meridian_app` (no `BYPASSRLS`, no table ownership). Every tenant table has `FORCE ROW LEVEL SECURITY` with a restrictive tenant wall. Restricted classes (compensation, bank, national ID, payroll results, payslips, confidential tickets, special leave reasons) add scope-read, self-read and scope-write policies through `app.can_see` and `app.can_write`.
 5. **Data at rest.** Bank account and national ID are AES-256-GCM encrypted under a per-subject key wrapped by the tenant key. Blind indexes (HMAC) allow duplicate detection without decrypting. Shredding a subject destroys the wrapped key. Shredding is blocked under a legal hold.
 6. **Integrity.** Audit chain with hash links written in the same transaction. Payroll snapshots, results and payslips are immutable by trigger. Pay-run transitions are enforced by a trigger.
 7. **Approvals.** State changes only via POST. Action tokens are single-use, 15 minutes, bound to approver, step and content hash. Payroll, role and bank approvals require in-app step-up.
-8. **Outbound.** Webhooks signed with HMAC-SHA256, URLs checked by an SSRF guard (blocks private, loopback, link-local and metadata ranges, resolves DNS before connecting, no redirects).
+8. **Outbound.** Webhooks are signed with HMAC-SHA256 and URLs are checked by an SSRF guard (blocks private, loopback, link-local and metadata ranges, resolves DNS before connecting, no redirects). Email and SMS use `email.send`/`sms.send` outbox topics, provider interfaces, dedupe keys, provider message ids and retry/permanent-failure classification. Account links are single-use, expiring and hash-stored; active suppressions are skipped.
 9. **AI.** The assistant sees only pseudonym tokens for people, never raw restricted fields. It can only read through tiered tools and can only draft; a human commits.
 10. **Operations.** No secrets in the repo. Errors never expose stack traces. Logs redact tokens and passwords.
 
 ## 6. Modules and acceptance criteria
 
 ### kernel
-- Register a tenant with an owner; login with password; enrol and verify TOTP; step-up; logout; session revocation.
+- Register a tenant with an owner; login with password; enrol and verify TOTP; step-up; logout; session revocation. Invite a member without returning a temporary password; accept an expiring invitation; request a uniform password reset; reset once and revoke existing sessions.
 - 5 failed logins lock the account for an increasing delay.
 - Cross-tenant read, write and update on every tenant table returns zero rows or an error (test generated from the catalog).
 - Audit chain verifies; tampering with any row is detected by the verifier.
@@ -82,7 +82,7 @@ Layers, from the outside in:
 
 ### flow
 - Any module creates an approval request with ordered steps. Approver acts via POST with session. Content change voids pending steps. Token endpoint works only for the bound approver and only once.
-- Inbox lists what is waiting on me. Notifications are created per event.
+- Inbox lists what is waiting on me. Notifications are created per event and eligible transactional email is enqueued in the same transaction. Per-user preferences default on; security mail cannot be disabled.
 
 ### time
 - `POST /ingest/punches` returns 202 with a receipt. The DB dedupes on (tenant, device, idempotency key, event time). Replay returns the same receipt as a duplicate. Events older than 120 days go to a late-punch review queue.

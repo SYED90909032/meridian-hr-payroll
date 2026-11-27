@@ -51,6 +51,25 @@ const schema = z.object({
   BANK_SFTP_HOST_KEY_SHA256: z.string().optional(),
   BANK_SFTP_REMOTE_DIR: z.string().default('/inbound'),
   BANK_SFTP_TIMEOUT_MS: z.coerce.number().int().min(1000).max(120000).default(15000),
+  MAIL_PROVIDER: z.enum(['log', 'smtp', 'postmark']).default('log'),
+  MAIL_FROM: z.string().email().default('Meridian <no-reply@localhost>'),
+  SMTP_HOST: z.string().optional(),
+  SMTP_PORT: z.coerce.number().int().min(1).max(65535).default(587),
+  SMTP_USER: z.string().optional(),
+  SMTP_PASSWORD: z.string().optional(),
+  SMTP_SECURE: z.enum(['true', 'false']).default('false'),
+  POSTMARK_TOKEN: z.string().optional(),
+  POSTMARK_API_BASE: z.string().url().default('https://api.postmarkapp.com'),
+  SMS_PROVIDER: z.enum(['log', 'twilio']).default('log'),
+  SMS_FROM: z.string().optional(),
+  TWILIO_ACCOUNT_SID: z.string().optional(),
+  TWILIO_AUTH_TOKEN: z.string().optional(),
+  TWILIO_API_BASE: z.string().url().default('https://api.twilio.com'),
+  HIBP_MODE: z.enum(['fail-open', 'fail-closed']).default('fail-open'),
+  HIBP_API_BASE: z.string().url().default('https://api.pwnedpasswords.com'),
+  CAPTCHA_PROVIDER: z.enum(['off', 'turnstile']).default('off'),
+  TURNSTILE_SECRET: z.string().optional(),
+  BOUNCE_WEBHOOK_SECRET: z.string().optional(),
 });
 
 export type Config = z.infer<typeof schema> & { masterKey: Buffer; signingSeed: Buffer };
@@ -89,5 +108,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   } else {
     signingSeed = Buffer.alloc(32, 9);
   }
+  if (prod && c.MAIL_PROVIDER === 'log') throw new Error('MAIL_PROVIDER must not be log in production');
+  if (prod && c.SMS_PROVIDER === 'log') throw new Error('SMS_PROVIDER must not be log in production');
+  if (c.MAIL_PROVIDER === 'smtp' && (!c.SMTP_HOST || !c.SMTP_USER || !c.SMTP_PASSWORD)) throw new Error('SMTP_HOST, SMTP_USER and SMTP_PASSWORD are required for SMTP mail');
+  if (c.MAIL_PROVIDER === 'postmark' && !c.POSTMARK_TOKEN) throw new Error('POSTMARK_TOKEN is required for Postmark mail');
+  if (c.SMS_PROVIDER === 'twilio' && (!c.SMS_FROM || !c.TWILIO_ACCOUNT_SID || !c.TWILIO_AUTH_TOKEN)) throw new Error('Twilio sender configuration is incomplete');
+  if (c.CAPTCHA_PROVIDER === 'turnstile' && !c.TURNSTILE_SECRET) throw new Error('TURNSTILE_SECRET is required for Turnstile');
+  if (prod && c.BOUNCE_WEBHOOK_SECRET === undefined) throw new Error('BOUNCE_WEBHOOK_SECRET is required in production');
   return { ...c, masterKey, signingSeed };
 }

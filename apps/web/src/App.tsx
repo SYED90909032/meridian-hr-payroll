@@ -7,7 +7,7 @@ import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
 import { SessionProvider } from './session';
 import { ToastHost } from './ui';
 import { FullLayout } from './layout/FullLayout';
-import { Login, Register, ChangePassword } from './pages/Auth';
+import { Login, Register, ChangePassword, ForgotPassword, ResetPassword, AcceptInvitation } from './pages/Auth';
 
 const Dashboard = lazy(() => import('./pages/Dashboard'));
 const People = lazy(() => import('./pages/People'));
@@ -34,6 +34,9 @@ export function App() {
           <Routes>
             <Route path="/login" element={<Login />} />
             <Route path="/register" element={<Register />} />
+            <Route path="/forgot-password" element={<ForgotPassword />} />
+            <Route path="/reset-password" element={<ResetPassword />} />
+            <Route path="/accept-invitation" element={<AcceptInvitation />} />
             <Route path="/account/password" element={<ChangePassword />} />
             <Route element={<FullLayout />}>
               <Route index element={<Dashboard />} />
