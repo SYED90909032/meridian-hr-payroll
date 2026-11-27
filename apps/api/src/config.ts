@@ -19,6 +19,14 @@ const schema = z.object({
   OPENAI_API_BASE: z.string().optional(),
   ASSISTANT_MODEL: z.string().optional(),
   TRUST_PROXY: z.enum(['true', 'false']).default('false'),
+  /** Object storage (ADR-025). `local` is for development and tests; production should use `s3`. */
+  OBJECT_STORE: z.enum(['local', 's3']).default('local'),
+  OBJECT_STORE_DIR: z.string().default('.data/objects'),
+  S3_BUCKET: z.string().optional(),
+  S3_REGION: z.string().default('us-east-1'),
+  S3_ENDPOINT: z.string().url().optional(),
+  S3_FORCE_PATH_STYLE: z.enum(['true', 'false']).default('false'),
+  S3_KEY_PREFIX: z.string().optional(),
 });
 
 export type Config = z.infer<typeof schema> & { masterKey: Buffer; signingSeed: Buffer };

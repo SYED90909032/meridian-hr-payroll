@@ -6,6 +6,14 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and 
 Each entry says **what** changed, **where** (file path) and, for UI work, **which Spike Admin source** it was modelled on, so a future developer can trace any visual decision back to its reference.
 
 ## [Unreleased]
+### Production-readiness programme (branch `feat/production-readiness`)
+Follows `docs/production-readiness-blueprint.md` phase by phase. Progress is tracked in `docs/production-readiness-progress.md`; decisions and their working defaults in `docs/DECISIONS.md`. Each phase below records **what** changed, **where**, **why/approach**, **how it was verified** and **known limits**. The non-negotiables (fixed route pipeline, forced RLS, append-only audit chain, content-hash-bound approvals, field encryption with crypto-erasure, the L2 live-payment gate) are not weakened by any phase.
+#### Phase 0 and foundations
+- **Decisions log** (`docs/DECISIONS.md`): the eight open questions from blueprint section 15 are recorded with the working default each is being built on, and which need the owner or an outside party. Nothing is marked confirmed that was not.
+- **Object storage port** (`apps/api/src/storage/`, ADR-025): `ObjectStore` interface (`put`, `get`, `head`, `delete`, `list`, `presignGet`), a `local` filesystem backend and an `s3` backend for any S3-compatible service. `put(..., { overwrite: false })` is write-once, enforced by the service with `If-None-Match: *`. Keys are validated and cannot escape the root. Config: `OBJECT_STORE`, `OBJECT_STORE_DIR`, `S3_*`. Exposed to code as `svc.objects`.
+  - Verified: 15 contract tests run against the local backend and against S3 (`moto`, a wire-compatible AWS stand-in), including write-once, prefix isolation and presigned downloads. Not yet run against real AWS S3 or R2.
+- **Test-infrastructure helper** (`apps/api/test/infra.ts`): integration tests that need Redis, S3/KMS (moto), SMTP or ClamAV skip when the service is absent locally, and fail when `REQUIRE_INFRA=1` (CI), so a green pipeline cannot mean silently skipped.
+- **Dependencies added for later phases**: AWS SDK (S3, KMS, presigner), nodemailer, @simplewebauthn/server, openid-client, ioredis, prom-client, ssh2, OpenTelemetry API/SDK. `pnpm-workspace.yaml` records that `ssh2`, `cpu-features` and `protobufjs` need no install scripts.
 ### Fixed
 - **Assistant chat box** (`pages/Assistant.tsx`, `styles.css`): sending a message no longer scrolls the whole page down. The auto-scroll used `scrollIntoView`, which also scrolled the window; it now scrolls only the message list (`.chat-body`). The box height fits the space left on screen, recalculated on resize with a 340px minimum, so the input row always stays visible. `.chat-body` has `min-height: 0` and `overscroll-behavior: contain`.
 ## [0.2.1] - 2026-11-27 - UI review fixes (calendar, activity filter, theme animation, spacing)
