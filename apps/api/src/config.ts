@@ -70,6 +70,9 @@ const schema = z.object({
   CAPTCHA_PROVIDER: z.enum(['off', 'turnstile']).default('off'),
   TURNSTILE_SECRET: z.string().optional(),
   BOUNCE_WEBHOOK_SECRET: z.string().optional(),
+  WEBAUTHN_RP_ID: z.string().min(1).default('localhost'),
+  WEBAUTHN_ORIGIN: z.string().url().default('http://localhost:5173'),
+  SSO_CALLBACK_URL: z.string().url().default('http://localhost:8080/api/v1/auth/sso/callback'),
 });
 
 export type Config = z.infer<typeof schema> & { masterKey: Buffer; signingSeed: Buffer };

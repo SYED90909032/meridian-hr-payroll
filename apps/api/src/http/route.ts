@@ -17,7 +17,7 @@ export interface RouteMeta {
   method: string; path: string; summary: string; tag: string; auth: AuthKind; perm?: Perm; stepUp: boolean;
   body?: ZodTypeAny; query?: ZodTypeAny; idempotent?: 'required' | 'optional'; readOnlyKey: boolean;
 }
-export type AuthKind = 'public' | 'user' | 'session' | 'device' | 'any';
+export type AuthKind = 'public' | 'user' | 'session' | 'device' | 'scim' | 'any';
 
 export interface HandlerArgs<B, Q> {
   p: Principal; ctx: Ctx; db: Db; body: B; query: Q; params: Record<string, string>; req: FastifyRequest; reply: FastifyReply;
@@ -69,6 +69,7 @@ export function defineRoute<B extends ZodTypeAny = ZodTypeAny, Q extends ZodType
         if (!p) throw unauthorized();
         if (def.auth === 'session' && p.kind !== 'user') throw forbidden('This action needs a signed-in user');
         if (def.auth === 'device' && p.kind !== 'device') throw unauthorized();
+        if (def.auth === 'scim' && p.kind !== 'scim') throw unauthorized();
         if (def.auth === 'any' && p.kind === 'device') throw forbidden();
         if ((def.auth === 'session' || def.auth === 'any') && !p.tenantId) throw new HttpError(409, 'tenant_required', 'Choose a company first');
         if (p.kind === 'apikey' && def.method !== 'GET' && (!p.allowWrite || !def.perm || !p.perms.has(def.perm))) throw forbidden('This API key is not authorised for writes');
@@ -155,7 +156,7 @@ export function openApiDocument(routes: RouteMeta[]): Record<string, unknown> {
     const params = [...r.path.matchAll(/:([A-Za-z0-9_]+)/g)].map((m) => ({ name: m[1], in: 'path', required: true, schema: { type: 'string' } }));
     const op: Record<string, unknown> = {
       summary: r.summary, tags: [r.tag], parameters: params,
-      security: r.auth === 'public' ? [] : r.auth === 'device' ? [{ deviceKey: [] }] : r.auth === 'any' ? [{ cookieAuth: [] }, { apiKey: [] }] : [{ cookieAuth: [] }],
+      security: r.auth === 'public' ? [] : r.auth === 'device' ? [{ deviceKey: [] }] : r.auth === 'scim' ? [{ scimBearer: [] }] : r.auth === 'any' ? [{ cookieAuth: [] }, { apiKey: [] }] : [{ cookieAuth: [] }],
       'x-required-permission': r.perm ?? null, 'x-step-up': r.stepUp, 'x-idempotency': r.idempotent ?? null,
       responses: { '200': { description: 'OK' }, '400': { description: 'Invalid request' }, '401': { description: 'Not signed in' }, '403': { description: 'Not allowed' } },
     };
@@ -174,6 +175,7 @@ export function openApiDocument(routes: RouteMeta[]): Record<string, unknown> {
       cookieAuth: { type: 'apiKey', in: 'cookie', name: 'mer_sid' },
       apiKey: { type: 'apiKey', in: 'header', name: 'X-Api-Key' },
       deviceKey: { type: 'apiKey', in: 'header', name: 'X-Device-Key' },
+      scimBearer: { type: 'http', scheme: 'bearer' },
     } },
   };
 }

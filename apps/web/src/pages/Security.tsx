@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
+import { startRegistration } from '@simplewebauthn/browser';
 import QRCode from 'qrcode';
-import { fmtDateTime, get, post, put } from '../api';
+import { del, fmtDateTime, get, patch, post, put } from '../api';
 import { useMe, useSession } from '../session';
 import { Banner, Card, Chip, ConfirmModal, ErrorBox, Field, FormModal, Loading, Modal, PageHead, Table, useAsync, useToast } from '../ui';
 
@@ -21,6 +22,8 @@ export default function Security() {
         <p className="muted" style={{ marginTop: 0 }}>{me.user.totpEnabled ? 'Your account asks for a 6-digit code from your authenticator app at sign-in. Approving payroll requires it.' : 'Add an authenticator app (such as Google Authenticator, 1Password or Authy). It is required to approve payroll.'}</p>
         {me.user.totpEnabled ? <button className="btn" onClick={() => setOff(true)}>Turn off</button> : <button className="btn primary" onClick={() => setEnrol(true)}>Set up</button>}
       </Card>
+      <div style={{ height: 16 }} />
+      <Passkeys />
       <div style={{ height: 16 }} />
       <Card title="Password" actions={<button className="btn" onClick={() => setPw(true)}>Change password</button>}>
         <span className="muted">Use at least 12 characters. A long phrase is better than a clever short one. Changing it signs out your other devices.</span>
@@ -55,6 +58,27 @@ export default function Security() {
       {others && <ConfirmModal title="Sign out other devices" confirm="Sign out" body="Every session except this one will end." onClose={() => setOthers(false)} onConfirm={async () => { await post('/auth/sessions/revoke-others'); toast('Done'); sessions.reload(); }} />}
     </>
   );
+}
+
+function Passkeys() {
+  const toast = useToast();
+  const keys = useAsync(() => get<{ passkeys: Array<{ id: string; label: string; createdAt: string; lastUsedAt: string | null }> }>('/auth/passkeys'), []);
+  const [busy, setBusy] = useState(false);
+  const add = async () => {
+    setBusy(true);
+    try {
+      const options = await post<Record<string, unknown>>('/auth/passkeys/register/options');
+      const response = await startRegistration({ optionsJSON: options as never });
+      await post('/auth/passkeys/register/verify', { response, label: 'This device' });
+      toast('Passkey added'); keys.reload();
+    } catch (e) { toast(e instanceof Error ? e.message : 'Could not add passkey', true); } finally { setBusy(false); }
+  };
+  return <Card title="Passkeys" actions={<button className="btn primary" disabled={busy} onClick={add}>{busy ? 'Waiting…' : 'Add passkey'}</button>} flush>
+    <p className="muted" style={{ margin: '0 16px 14px' }}>Passkeys use a device unlock or security key. They can sign you in and satisfy step-up checks without sharing a password.</p>
+    {keys.data?.passkeys.length ? <Table head={['Name', 'Added', 'Last used', '']}>
+      {keys.data.passkeys.map((x) => <tr key={x.id}><td><strong>{x.label}</strong></td><td>{fmtDateTime(x.createdAt)}</td><td>{fmtDateTime(x.lastUsedAt)}</td><td className="right nowrap"><button className="btn sm ghost" onClick={async () => { const label = window.prompt('Passkey name', x.label); if (label?.trim()) { await patch(`/auth/passkeys/${x.id}`, { label: label.trim() }); toast('Renamed'); keys.reload(); } }}>Rename</button> <button className="btn sm ghost" onClick={async () => { if (window.confirm('Remove this passkey?')) { await del(`/auth/passkeys/${x.id}`); toast('Removed'); keys.reload(); } }}>Remove</button></td></tr>)}
+    </Table> : <span className="muted" style={{ margin: '0 16px 16px', display: 'block' }}>No passkeys registered yet.</span>}
+  </Card>;
 }
 
 function Enrol({ onClose, onDone }: { onClose: () => void; onDone: (codes: string[]) => void }) {

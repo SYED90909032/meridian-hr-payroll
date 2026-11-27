@@ -25,6 +25,9 @@ import { registerAuditRoutes } from './modules/audit/routes.js';
 import { registerInsightRoutes } from './modules/insight/routes.js';
 import { registerAssistantRoutes } from './modules/assistant/routes.js';
 import { registerCommsRoutes } from './modules/comms/routes.js';
+import { registerPasskeyRoutes } from './modules/iam/passkeys.js';
+import { registerSsoRoutes } from './modules/iam/sso.js';
+import { registerScimRoutes } from './modules/scim/routes.js';
 
 declare module 'fastify' { interface FastifyRequest { principal?: Principal | null } }
 
@@ -52,6 +55,10 @@ export async function buildApp(cfg: Config, pools: Pools): Promise<{ app: Fastif
     hsts: cfg.NODE_ENV === 'production' ? { maxAge: 31536000, includeSubDomains: true } : false,
   });
   await app.register(cookie);
+  app.addContentTypeParser('application/scim+json', { parseAs: 'string' }, (req, body, done) => {
+    try { done(null, JSON.parse(body as string)); } catch { done(new Error('Invalid JSON')); }
+  });
+
   app.addHook('onSend', async (req, reply) => {
     if (req.url.startsWith('/api/')) { reply.header('Cache-Control', 'no-store'); reply.header('Pragma', 'no-cache'); }
   });
@@ -75,10 +82,12 @@ export async function buildApp(cfg: Config, pools: Pools): Promise<{ app: Fastif
     const deviceKey = req.headers['x-device-key'];
     if (typeof apiKey === 'string') { req.principal = await principalFromApiKey(pools, apiKey); return; }
     if (typeof deviceKey === 'string') { req.principal = await principalFromDeviceKey(pools, deviceKey); return; }
+    const authorization = req.headers.authorization;
+    if (typeof authorization === 'string' && authorization.startsWith('Bearer ')) { req.principal = await principalFromScimToken(pools, authorization.slice(7).trim()); return; }
     const token = req.cookies[SESSION_COOKIE];
     req.principal = await principalFromSession(pools, token, cfg.SESSION_IDLE_MINUTES);
     // Cookie-authenticated mutations must carry our custom header. Browsers will not add it cross-site without a CORS preflight, which we never grant.
-    if (req.principal && ['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method) && req.headers['x-meridian-client'] !== 'web') {
+    if (req.principal?.kind === 'user' && ['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method) && req.headers['x-meridian-client'] !== 'web') {
       throw new HttpError(403, 'csrf', 'Missing client header');
     }
   });
@@ -124,6 +133,9 @@ export async function buildApp(cfg: Config, pools: Pools): Promise<{ app: Fastif
 
   registerAuthRoutes(svc);
   registerCommsRoutes(svc);
+  registerPasskeyRoutes(svc);
+  registerSsoRoutes(svc);
+  registerScimRoutes(svc);
   registerPeopleRoutes(svc);
   registerTimeRoutes(svc);
   registerFlowRoutes(svc);
@@ -194,6 +206,19 @@ async function principalFromDeviceKey(pools: Pools, key: string): Promise<Princi
   pools.auth.query('update tm.device set last_seen_at = now() where id = $1', [d.id]).catch(() => undefined);
   return { kind: 'device', userId: null, tenantId: d.tenant_id, employeeId: null, sessionId: null, email: '', displayName: 'device', roles: [], perms: new Set<Perm>(),
     mfa: false, totpEnabled: false, stepUpAt: null, mustChangePassword: false, credentialId: d.id, deviceId: d.id };
+}
+
+async function principalFromScimToken(pools: Pools, token: string): Promise<Principal | null> {
+  if (!/^scim_[A-Za-z0-9_-]{32,64}$/.test(token)) return null;
+  const prefix = token.slice(0, 14);
+  const r = await pools.auth.query('select s.id, s.tenant_id, s.token_hash, s.expires_at, s.revoked_at, t.status from kernel.scim_token s join kernel.tenant t on t.id = s.tenant_id where s.token_prefix = $1', [prefix]);
+  const s = r.rows[0];
+  if (!s) return null;
+  const given = sha256(token), have = s.token_hash as Buffer;
+  if (given.length !== have.length || !timingSafeEqual(given, have)) return null;
+  if (s.revoked_at || new Date(s.expires_at).getTime() <= Date.now() || s.status !== 'active') return null;
+  pools.auth.query('update kernel.scim_token set last_used_at = now() where id = $1', [s.id]).catch(() => undefined);
+  return { kind: 'scim', userId: null, tenantId: s.tenant_id, employeeId: null, sessionId: null, email: 'scim', displayName: 'SCIM', roles: [], perms: new Set<Perm>(), mfa: false, totpEnabled: false, stepUpAt: null, mustChangePassword: false, credentialId: s.id };
 }
 
 export type { FastifyRequest };

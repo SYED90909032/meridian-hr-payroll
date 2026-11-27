@@ -12,11 +12,11 @@ Method: assets and trust boundaries first, then threats per boundary (STRIDE), t
 
 ## 2. Actors
 
-External attacker; malicious or curious tenant user (employee, manager, HR admin); malicious payroll admin acting alone; compromised API key or webhook endpoint; compromised database credential for one role; malicious content passed to the assistant (prompt injection); the platform operator with database access.
+External attacker; malicious or curious tenant user (employee, manager, HR admin); malicious payroll admin acting alone; compromised API key, SCIM token or webhook endpoint; compromised database credential for one role; compromised or misconfigured IdP; malicious content passed to the assistant (prompt injection); the platform operator with database access.
 
 ## 3. Trust boundaries
 
-Browser to API (cookies, CSRF) / API to database (three least-privilege roles, row-level security) / API to the internet (webhooks, optional model endpoint) / worker to database / devices to ingest endpoint (device keys) / operator to database (owner role).
+Browser to API (cookies, CSRF, WebAuthn ceremonies) / IdP to API (OIDC discovery, authorization and token endpoints) / provisioning IdP to SCIM / API to database (three least-privilege roles, row-level security) / API to the internet (webhooks, optional model endpoint) / worker to database / devices to ingest endpoint (device keys) / operator to database (owner role).
 
 ## 4. Threats and controls
 
@@ -24,6 +24,9 @@ Browser to API (cookies, CSRF) / API to database (three least-privilege roles, r
 | --- | --- | --- | --- | --- |
 | T1 | Credential stuffing or password guessing | scrypt, lockout with back-off, per-route rate limits, uniform timing for unknown emails, local common-password floor and HIBP range k-anonymity on registration/invite/reset/change | `api-auth.test.ts`, `comms.test.ts` | HIBP availability policy is configurable; CAPTCHA is an optional hook and real provider behavior is not tested |
 | T2 | Session theft | HttpOnly, Secure, SameSite cookies; hashed tokens at rest; idle and absolute expiry; revoke list | `api-auth.test.ts` | Token theft from a compromised browser still works until expiry. No device binding |
+| T2a | Passkey replay or cloned authenticator | Vetted WebAuthn verification; required user verification; RP ID/origin binding; five-minute session-bound, single-use challenges; counter regression rejection and audit | `p3sso.test.ts` (software authenticator) | Hardware/platform authenticators and browser UI were not tested; authenticator recovery remains an operator concern |
+| T2b | OIDC code/token substitution or login CSRF | Discovery through guarded fetch; HTTPS in production; state, nonce and S256 PKCE; single-use state; JWKS signature, issuer, audience, expiry and verified-email checks | `p3sso.test.ts` (in-process fake IdP) | No real IdP tenant was tested; IdP compromise and incorrect customer-side claims remain risks |
+| T2c | SCIM token theft or provisioning privilege escalation | Tenant-scoped hashed bearer tokens with expiry/revocation; strict schemas and supported PatchOp subset; membership-only app queries; mapped roles; deactivation revokes sessions and API keys | `p3sso.test.ts` (synthetic SCIM client requests) | Token theft before rotation can provision/deactivate within its tenant; external IdP delivery/retry behavior was not tested |
 | T3 | CSRF | Origin check and custom header on cookie mutations; SameSite=Lax; API keys cannot mutate | `api-auth.test.ts` | Relies on browsers sending Origin |
 | T4 | XSS | React escaping, strict CSP (`script-src 'self'`, no inline script), no `dangerouslySetInnerHTML`, user text rendered as text | CSP header checked in production boot | `style-src 'unsafe-inline'` is allowed for React inline styles |
 | T5 | Cross-tenant data access (IDOR, SQL mistakes) | Forced RLS on every tenant table; app role has no BYPASSRLS; tenant bound per transaction; ids never trusted without tenant filter | `db-security.test.ts` (26 tests) | Policies are written and reviewed by one author. **Needs independent review** |
@@ -45,6 +48,7 @@ Browser to API (cookies, CSRF) / API to database (three least-privilege roles, r
 ## 5. Not modelled yet
 
 Physical and cloud account security of whoever hosts it; organisational controls (joiner/mover/leaver, key ceremony, incident response); tenant-supplied files (virus scanning is not implemented for documents); mailbox/provider compromise and DNS reputation; SSO account takeover paths (no SSO yet); mobile clients (not built).
+Physical and cloud account security of whoever hosts it; organisational controls (joiner/mover/leaver, key ceremony, incident response); tenant-supplied files (virus scanning is not implemented for documents); IdP account takeover and claim-mapping errors; real-provider SCIM retry/concurrency behavior; mobile clients (not built).
 
 ## 6. Review plan before real data
 
