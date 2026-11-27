@@ -34,5 +34,6 @@ export function permsFor(roles: string[]): Set<Perm> {
   return out;
 }
 
-/** Scopes an API key may carry. Keys are read-only. */
-export const API_KEY_SCOPES = ['people.read', 'time.read', 'leave.read', 'audit.read', 'insight.read'] as const satisfies readonly Perm[];
+/** API-key scopes. Write scopes are separately gated by allow_write and never include payroll, approvals, audit, access, key, or webhook actions. */
+export const API_KEY_SCOPES = ['people.read', 'time.read', 'leave.read', 'audit.read', 'insight.read', 'people.write', 'leave.admin'] as const satisfies readonly Perm[];
+export const API_KEY_WRITE_SCOPES = new Set<Perm>(['people.write', 'leave.admin']);

@@ -71,13 +71,14 @@ export function defineRoute<B extends ZodTypeAny = ZodTypeAny, Q extends ZodType
         if (def.auth === 'device' && p.kind !== 'device') throw unauthorized();
         if (def.auth === 'any' && p.kind === 'device') throw forbidden();
         if ((def.auth === 'session' || def.auth === 'any') && !p.tenantId) throw new HttpError(409, 'tenant_required', 'Choose a company first');
-        if (p.kind === 'apikey' && def.method !== 'GET') throw forbidden('API keys are read-only');
+        if (p.kind === 'apikey' && def.method !== 'GET' && (!p.allowWrite || !def.perm || !p.perms.has(def.perm))) throw forbidden('This API key is not authorised for writes');
         if (p.mustChangePassword && !def.path.startsWith('/api/v1/auth/')) throw new HttpError(403, 'password_change_required', 'Change your password to continue');
       }
       // 2. Authorisation
       if (def.perm && (!p || !p.perms.has(def.perm))) throw forbidden();
       if (def.requireMfa && !(p?.totpEnabled && p.mfa)) throw new HttpError(403, 'mfa_required', 'Turn on two-step verification to do this');
       if (def.stepUp) {
+        if (p?.kind === 'apikey') throw new HttpError(403, 'step_up_unavailable', 'API keys cannot use step-up routes');
         const fresh = p?.stepUpAt && Date.now() - p.stepUpAt.getTime() < 10 * 60_000;
         if (!fresh) throw new HttpError(401, 'step_up_required', 'Confirm your identity to continue');
       }

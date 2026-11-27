@@ -14,8 +14,13 @@ const cfg = loadConfig();
 const pools = createPools(cfg);
 const kms = await createKms(cfg);
 let stopping = false;
+let lastRetentionAt = 0;
 const backoff = (attempts: number): number => Math.min(3600, 15 * 2 ** Math.min(attempts, 8));
 export async function tick(): Promise<number> {
+  if (Date.now() - lastRetentionAt >= 24 * 60 * 60_000) {
+    await pools.worker.query('select plat.purge_webhook_deliveries($1)', [cfg.WEBHOOK_DELIVERY_RETENTION_DAYS]);
+    lastRetentionAt = Date.now();
+  }
   const r = await pools.worker.query<OutboxRow>('select * from kernel.claim_outbox($1, $2)', [25, 60]);
   for (const row of r.rows) {
     try {

@@ -5,6 +5,7 @@ import type { Kms } from '../../crypto/kms.js';
 import { open, seal } from '../../crypto/kms.js';
 import { withTx } from '../../db/tx.js';
 import { resolveSafeTarget, type SafeTarget } from './ssrf.js';
+import { urlMatchesAllowlist, type WebhookAllowRule } from './allowlist.js';
 
 export interface OutboxRow { id: string; tenant_id: string; topic: string; payload: Record<string, unknown>; created_at: Date | string; attempts: number }
 export const webhookAad = (endpointId: string): string => `webhook:${endpointId}`;
@@ -42,9 +43,16 @@ export async function deliverOutbox(pools: Pools, kms: Kms, row: OutboxRow, send
   for (const e of eps) {
     const ts = Math.floor(Date.now() / 1000);
     const body = JSON.stringify({ id: String(row.id), topic: row.topic, tenant_id: row.tenant_id, created_at: new Date(row.created_at).toISOString(), data: row.payload });
-    let code: number | null = null; let err: string | null = null;
+    let code: number | null = null; let err: string | null = null; let permanentFailure = false;
     try {
       const secret = open(kms.tenantKey(row.tenant_id), e.secret_enc as Buffer, webhookAad(e.id)).toString('utf8');
+      const rules = (await withTx(pools.app, ctx, async (db) => (await db.query<WebhookAllowRule>('select host, path_prefix from plat.webhook_allowlist')).rows));
+      const parsed = new URL(e.url as string);
+      if (!urlMatchesAllowlist(parsed, rules)) {
+        err = 'Destination blocked by the tenant webhook allow-list';
+        permanentFailure = true;
+      }
+      if (err) throw new Error(err);
       const target = await resolveSafeTarget(e.url, lookup);
       code = await send(target, body, {
         'Content-Type': 'application/json', 'X-Meridian-Event': row.topic, 'X-Meridian-Delivery': `${e.id}:${row.id}`,
@@ -55,9 +63,9 @@ export async function deliverOutbox(pools: Pools, kms: Kms, row: OutboxRow, send
     await withTx(pools.app, ctx, async (db) => {
       await db.query(
         `update plat.webhook_delivery set attempts = attempts + 1, response_code = $3, last_error = $4,
-                status = case when $4::text is null then 'delivered' when attempts + 1 >= 8 then 'failed' else 'pending' end,
+                status = case when $4::text is null then 'delivered' when $5::bool or attempts + 1 >= 8 then 'failed' else 'pending' end,
                 delivered_at = case when $4::text is null then now() else delivered_at end
-          where endpoint_id = $1 and outbox_id = $2`, [e.id, row.id, code, err]);
+          where endpoint_id = $1 and outbox_id = $2`, [e.id, row.id, code, err, permanentFailure]);
     });
     if (err) failed = err;
   }
