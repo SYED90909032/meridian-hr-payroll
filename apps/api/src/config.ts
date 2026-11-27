@@ -27,6 +27,14 @@ const schema = z.object({
   S3_ENDPOINT: z.string().url().optional(),
   S3_FORCE_PATH_STYLE: z.enum(['true', 'false']).default('false'),
   S3_KEY_PREFIX: z.string().optional(),
+  BANK_TRANSPORT: z.enum(['manual', 'sftp']).default('manual'),
+  BANK_SFTP_HOST: z.string().optional(),
+  BANK_SFTP_PORT: z.coerce.number().int().min(1).max(65535).default(22),
+  BANK_SFTP_USERNAME: z.string().optional(),
+  BANK_SFTP_PRIVATE_KEY: z.string().optional(),
+  BANK_SFTP_HOST_KEY_SHA256: z.string().optional(),
+  BANK_SFTP_REMOTE_DIR: z.string().default('/inbound'),
+  BANK_SFTP_TIMEOUT_MS: z.coerce.number().int().min(1000).max(120000).default(15000),
 });
 
 export type Config = z.infer<typeof schema> & { masterKey: Buffer; signingSeed: Buffer };
@@ -38,6 +46,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   }
   const c = parsed.data;
   const prod = c.NODE_ENV === 'production';
+  if (prod && c.BANK_TRANSPORT === 'sftp' && (!c.BANK_SFTP_HOST || !c.BANK_SFTP_USERNAME || !c.BANK_SFTP_PRIVATE_KEY || !c.BANK_SFTP_HOST_KEY_SHA256)) {
+    throw new Error('SFTP bank transport requires host, username, private key, and pinned host key in production');
+  }
   let masterKey: Buffer;
   if (c.MERIDIAN_MASTER_KEY) {
     masterKey = Buffer.from(c.MERIDIAN_MASTER_KEY, 'base64');

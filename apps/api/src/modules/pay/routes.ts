@@ -5,6 +5,8 @@ import { HttpError, badRequest, conflict, forbidden, notFound } from '../../erro
 import { isoDate, pid, short, uuid } from '../../http/schemas.js';
 import { notifyEmployee, notifyRoles, notifyUser } from '../flow/notify.js';
 import { calculateRun, currentResultSetHash, finaliseRun, loadRun, lockInputs, move, packFor } from './service.js';
+import { compareParallelRun, explainParallelVariance } from './parallel.js';
+import { queueBankSubmission } from './bank/service.js';
 import { registerPayslipRoutes } from './payslips.js';
 
 const daysBetween = (a: string, b: string): number => Math.round((Date.parse(b + 'T00:00:00Z') - Date.parse(a + 'T00:00:00Z')) / 86_400_000);
@@ -303,6 +305,43 @@ export function registerPayRoutes(svc: Services): void {
       for (const row of ps.rows) await notifyEmployee(db, ctx.tenantId, row.employee_id, { kind: 'payslip.published', title: 'Your payslip is ready', body: `${r.period_start} to ${r.period_end}`, link: '/me/payslips' });
       await audit('pay_run.published', 'pay_run', r.id, { payslips: ps.rowCount });
       return { published: ps.rowCount };
+    },
+  });
+  defineRoute(svc, {
+    method: 'POST', path: '/api/v1/pay/parallel-runs', summary: 'Compare a parallel payroll CSV with a Meridian run', tag: 'Payroll', auth: 'session', perm: 'pay.parallel', actors: ['payroll'], idempotent: 'optional',
+    body: z.object({ payRunId: uuid, csv: z.string().min(1).max(512 * 1024) }).strict(),
+    handler: async ({ db, ctx, body, audit }) => {
+      const out = await compareParallelRun(db, ctx.tenantId, ctx.userId!, body.payRunId, body.csv);
+      await audit('parallel_run.compared', 'parallel_run', out.id, { pay_run_id: body.payRunId, status: out.status, employees: out.employees, unexplained: out.unexplained, external_file_hash: out.externalFileHash });
+      return { status: 201, body: out };
+    },
+  });
+  defineRoute(svc, {
+    method: 'GET', path: '/api/v1/pay/parallel-runs/:id', summary: 'View a parallel-run variance report', tag: 'Payroll', auth: 'session', perm: 'pay.parallel',
+    handler: async ({ db, params, audit }) => {
+      const id = pid(params.id);
+      const run = (await db.query('select id, pay_run_id, period_start::text, period_end::text, external_file_hash, status, zero_unexplained, created_by, created_at, completed_at from pay.parallel_run where id = $1', [id])).rows[0];
+      if (!run) throw notFound('Parallel run not found');
+      const employees = (await db.query('select id, employee_id, employee_no, external_gross_minor, external_deductions_minor, external_net_minor, meridian_gross_minor, meridian_deductions_minor, meridian_net_minor, gross_variance_minor, deductions_variance_minor, net_variance_minor, line_differences, status, explanation, explained_by, explained_at from pay.parallel_run_employee where parallel_run_id = $1 order by employee_no', [id])).rows;
+      await audit('parallel_run.report_viewed', 'parallel_run', id, { employees: employees.length });
+      return { run, employees };
+    },
+  });
+  defineRoute(svc, {
+    method: 'POST', path: '/api/v1/pay/parallel-runs/:id/employees/:employeeId/explain', summary: 'Record why a parallel-run variance is accepted', tag: 'Payroll', auth: 'session', perm: 'pay.parallel', stepUp: true, actors: ['payroll'],
+    body: z.object({ reason: z.string().trim().min(5).max(1000) }).strict(),
+    handler: async ({ db, ctx, params, body, audit }) => {
+      await explainParallelVariance(db, ctx.tenantId, ctx.userId!, pid(params.id), uuid.parse(params.employeeId), body.reason);
+      await audit('parallel_run.variance_explained', 'parallel_run', pid(params.id), { employee_id: params.employeeId });
+      return { ok: true };
+    },
+  });
+  defineRoute(svc, {
+    method: 'POST', path: '/api/v1/pay/runs/:id/bank-submit', summary: 'Queue a bank hand-off after payment release', tag: 'Payroll', auth: 'session', perm: 'pay.release', stepUp: true, actors: ['payroll'],
+    handler: async ({ db, ctx, params, audit }) => {
+      const out = await queueBankSubmission(db, ctx.tenantId, ctx.userId!, pid(params.id));
+      await audit('bank_submission.queued', 'pay_run', pid(params.id), { submission_id: out.submissionId, file_hash: out.fileHash });
+      return { status: 202, body: out };
     },
   });
   defineRoute(svc, {

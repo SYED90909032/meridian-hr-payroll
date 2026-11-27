@@ -96,7 +96,8 @@ Layers, from the outside in:
 - Exceptions (missing bank, negative net, bank changed since last run, duplicate bank account, net change over threshold) block approval until resolved or waived with a reason.
 - Approver must differ from preparer and must not be a subject of the run, unless the single-admin exception is active, in which case release is delayed 24 hours and the line is flagged.
 - Finalise makes results immutable, renders each payslip once, hashes it, and builds the WPS SIF file.
-- Live runs need an L2 or higher pack. Sandbox runs can reach `finalised` and `published` but never `payment_released`.
+- Live runs need an L2 or higher pack. Promotion to L2/L3 additionally requires an owner-recorded exact-pack sign-off, independent vector-set hash, bank acceptance reference and two qualifying zero-unexplained parallel runs. Sandbox runs can reach `finalised` and `published` but never `payment_released`.
+- Parallel runs import strict integer minor-unit CSV, compare employee totals and supplied lines, and remain blocked until every variance is matched or explained. SIF validation is structural self-checking only; it is not bank acceptance.
 
 ### service
 - Helpdesk tickets with categories; confidential tickets visible only to the requester and users holding the confidential class grant. Announcements. Knowledge base articles.

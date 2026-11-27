@@ -31,7 +31,7 @@ Report vulnerabilities privately to the repository owner (GitHub private advisor
 
 **Transport and browser.** Helmet defaults, `Content-Security-Policy: default-src 'self'` (no inline scripts, no third-party origins), HSTS, `frame-ancestors 'none'`, `Referrer-Policy: no-referrer`, `Cache-Control: no-store` on API responses. Rate limits per route group.
 
-**Payments.** Pay-run approval is bound to a content hash of the calculated results, so changing any line invalidates the approval. The approver cannot be the preparer, except through the recorded single-admin exception (ADR-006: step-up, 24-hour release delay, flagged line). Live payment is blocked while the rule pack is below assurance L2 (ADR-003). The bank file download is permission-gated, step-up protected and audited.
+**Payments.** Pay-run approval is bound to a content hash of the calculated results, so changing any line invalidates the approval. The approver cannot be the preparer, except through the recorded single-admin exception (ADR-006: step-up, 24-hour release delay, flagged line). Live payment is blocked while the rule pack is below assurance L2 (ADR-003); the database now also requires an exact-pack owner sign-off, independent vector hash, bank acceptance reference and two completed zero-unexplained parallel runs. The bank file download and post-release hand-off are permission-gated, step-up protected and audited. No reviewer, bank or live employer has supplied evidence for the shipped L0 pack.
 
 ## 2. Payroll assumptions
 
