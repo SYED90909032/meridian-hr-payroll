@@ -19,6 +19,11 @@ const schema = z.object({
   OPENAI_API_BASE: z.string().optional(),
   ASSISTANT_MODEL: z.string().optional(),
   TRUST_PROXY: z.enum(['true', 'false']).default('false'),
+  REDIS_URL: z.string().url().optional(),
+  RATE_LIMIT_KEY_PREFIX: z.string().min(1).max(80).default('meridian:rate-limit:'),
+  METRICS_TOKEN: z.string().min(16).optional(),
+  OTEL_EXPORTER_OTLP_ENDPOINT: z.string().url().optional(),
+  PAYDAY_WATCHDOG_HOURS: z.coerce.number().int().min(1).max(168).default(4),
   /** Object storage (ADR-025). `local` is for development and tests; production should use `s3`. */
   OBJECT_STORE: z.enum(['local', 's3']).default('local'),
   OBJECT_STORE_DIR: z.string().default('.data/objects'),

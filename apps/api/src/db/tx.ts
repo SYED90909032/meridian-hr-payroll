@@ -1,4 +1,5 @@
 import type pg from 'pg';
+import { withDbSpan } from '../observability.js';
 
 export type SystemActor = 'register' | 'iam' | 'hr' | 'time' | 'flow' | 'payroll';
 
@@ -19,21 +20,23 @@ export type Db = pg.PoolClient;
  */
 export async function withTx<T>(pool: pg.Pool, ctx: Ctx, fn: (db: Db) => Promise<T>, actors: SystemActor[] = [], reason?: string): Promise<T> {
   const db = await pool.connect();
-  try {
-    await db.query('begin');
-    await db.query(
-      `select set_config('app.tenant_id', $1, true), set_config('app.user_id', $2, true), set_config('app.employee_id', $3, true), set_config('app.system_actor', $4, true), set_config('app.transition_reason', $5, true)`,
-      [ctx.tenantId, ctx.userId ?? '', ctx.employeeId ?? '', actors.join(','), reason ?? ''],
-    );
-    const out = await fn(db);
-    await db.query('commit');
-    return out;
-  } catch (e) {
-    try { await db.query('rollback'); } catch { /* connection already gone */ }
-    throw e;
-  } finally {
-    db.release();
-  }
+  return withDbSpan('db.transaction', async () => {
+    try {
+      await db.query('begin');
+      await db.query(
+        `select set_config('app.tenant_id', $1, true), set_config('app.user_id', $2, true), set_config('app.employee_id', $3, true), set_config('app.system_actor', $4, true), set_config('app.transition_reason', $5, true)`,
+        [ctx.tenantId, ctx.userId ?? '', ctx.employeeId ?? '', actors.join(','), reason ?? ''],
+      );
+      const out = await fn(db);
+      await db.query('commit');
+      return out;
+    } catch (e) {
+      try { await db.query('rollback'); } catch { /* connection already gone */ }
+      throw e;
+    } finally {
+      db.release();
+    }
+  });
 }
 
 /** Writes an audit event in the caller's transaction. */

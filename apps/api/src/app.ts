@@ -5,6 +5,7 @@ import rateLimit from '@fastify/rate-limit';
 import fastifyStatic from '@fastify/static';
 import { existsSync } from 'node:fs';
 import { timingSafeEqual } from 'node:crypto';
+import Redis from 'ioredis';
 import type { Config } from './config.js';
 import type { Pools } from './db/pool.js';
 import { Kms } from './crypto/kms.js';
@@ -24,16 +25,18 @@ import { registerPlatformRoutes } from './modules/platform/routes.js';
 import { registerAuditRoutes } from './modules/audit/routes.js';
 import { registerInsightRoutes } from './modules/insight/routes.js';
 import { registerAssistantRoutes } from './modules/assistant/routes.js';
+import { finishRequestSpan, metrics, metricsContentType, metricsText, routeTemplate, startRequestSpan, updatePoolMetrics } from './observability.js';
 
-declare module 'fastify' { interface FastifyRequest { principal?: Principal | null } }
+declare module 'fastify' { interface FastifyRequest { principal?: Principal | null; meridianSpan?: ReturnType<typeof startRequestSpan>; meridianStartedAt?: bigint } }
 
 const PUBLIC_ERRORS = new Set([400, 401, 403, 404, 409, 410, 413, 415, 422, 429]);
 
 export async function buildApp(cfg: Config, pools: Pools): Promise<{ app: FastifyInstance; svc: Services }> {
+  const redis = cfg.REDIS_URL ? new Redis(cfg.REDIS_URL, { enableOfflineQueue: false, maxRetriesPerRequest: 1 }) : undefined;
   const app = Fastify({
     logger: cfg.NODE_ENV === 'test' && process.env.MERIDIAN_TEST_LOG !== 'on' ? false : {
       level: process.env.LOG_LEVEL ?? 'info',
-      redact: { paths: ['req.headers.authorization', 'req.headers.cookie', 'req.headers["x-api-key"]', 'req.headers["x-device-key"]', 'res.headers["set-cookie"]'], censor: '[redacted]' },
+      redact: { paths: ['req.body', 'req.headers.authorization', 'req.headers.cookie', 'req.headers["x-api-key"]', 'req.headers["x-device-key"]', 'req.headers["x-device-token"]', 'req.headers["x-access-token"]', 'req.headers["set-cookie"]', 'res.headers["set-cookie"]', 'password', '*.password', '*password*', 'secret', '*.secret', '*secret*', 'token', '*.token', '*token*', 'iban', '*.iban', '*iban*', 'nationalId', '*.nationalId', '*national*id*'], censor: '[redacted]' },
     },
     trustProxy: cfg.TRUST_PROXY === 'true',
     bodyLimit: 256 * 1024,
@@ -50,7 +53,23 @@ export async function buildApp(cfg: Config, pools: Pools): Promise<{ app: Fastif
     hsts: cfg.NODE_ENV === 'production' ? { maxAge: 31536000, includeSubDomains: true } : false,
   });
   await app.register(cookie);
-  await app.register(rateLimit, { global: true, max: 600, timeWindow: '1 minute', allowList: [] });
+  if (redis) redis.on('error', (err) => { metrics.limiterErrors.inc({ backend: 'redis' }); app.log.warn({ err: { message: err.message } }, 'rate limiter Redis unavailable; allowing requests'); });
+  await app.register(rateLimit, { global: true, max: 600, timeWindow: '1 minute', allowList: [], ...(redis ? { redis, nameSpace: cfg.RATE_LIMIT_KEY_PREFIX } : {}), skipOnError: Boolean(redis), keyGenerator: (req) => req.ip });
+
+  app.addHook('onRequest', async (req) => {
+    req.meridianStartedAt = process.hrtime.bigint();
+    req.meridianSpan = startRequestSpan(req.id, req.method);
+  });
+  app.addHook('onResponse', async (req, reply) => {
+    const route = routeTemplate(req);
+    const statusClass = `${Math.floor(reply.statusCode / 100)}xx`;
+    const seconds = req.meridianStartedAt ? Number(process.hrtime.bigint() - req.meridianStartedAt) / 1e9 : 0;
+    metrics.requests.inc({ route, method: req.method, status_class: statusClass });
+    metrics.latency.observe({ route, method: req.method, status_class: statusClass }, seconds);
+    updatePoolMetrics(pools);
+    if (req.meridianSpan) finishRequestSpan(req.meridianSpan, route, reply.statusCode);
+  });
+  app.addHook('onClose', async () => { if (redis) await redis.quit().catch(() => undefined); });
 
   app.addHook('onSend', async (req, reply) => {
     if (req.url.startsWith('/api/')) { reply.header('Cache-Control', 'no-store'); reply.header('Pragma', 'no-cache'); }
@@ -112,6 +131,14 @@ export async function buildApp(cfg: Config, pools: Pools): Promise<{ app: Fastif
   app.get('/api/v1/health', { config: { rateLimit: false } }, async () => ({ status: 'ok' }));
   app.get('/api/v1/health/ready', { config: { rateLimit: false } }, async (_req, reply) => {
     try { await pools.app.query('select 1'); return { status: 'ready' }; } catch { return reply.code(503).send({ status: 'unavailable' }); }
+  });
+  app.get('/metrics', { config: { rateLimit: false } }, async (req, reply) => {
+    if (!cfg.METRICS_TOKEN) return reply.code(404).send({ error: 'not_found' });
+    const supplied = req.headers.authorization?.startsWith('Bearer ') ? req.headers.authorization.slice(7) : '';
+    const a = Buffer.from(supplied), b = Buffer.from(cfg.METRICS_TOKEN);
+    if (a.length !== b.length || !timingSafeEqual(a, b)) return reply.code(401).send({ error: 'unauthorized' });
+    reply.type(metricsContentType());
+    return metricsText();
   });
 
   registerAuthRoutes(svc);
