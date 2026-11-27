@@ -47,11 +47,11 @@ The UAE pack (`packages/engine/src/packs/uae.ts`) is assurance **L0**: written f
 | Deduction cap (50% of wage) | **Unverified** in detail; the engine raises an exception rather than silently capping |
 | WPS SIF file | Built from the published layout. **Not validated by any bank or exchange house.** Treat as a draft until your bank's file validator accepts it |
 | Emirates ID | Format checked; the check digit is not enforced |
-| Mid-period compensation changes | Not split; the new rate applies to the whole period |
-| Notice pay on termination | Not automatic |
-| Leave proration | Not implemented (open decision) |
-| Overnight shifts | Staged, not supported |
-| Contractors | Excluded from pay runs |
+| Mid-period compensation changes | Snapshot builder splits valid-time compensation segments; reviewer must confirm the calculation basis |
+| Notice pay on termination | Contract notice days are parameterised and included in final settlement inputs; reviewer sign-off required |
+| Leave proration | Calendar-day employment proration uses the pack's assumed 30-day basis; reviewer sign-off required |
+| Overnight shifts | Supported with tenant-selectable start/end local-date attribution; default is shift start |
+| Contractors | Excluded by default; an explicit tenant setting enables a separate, non-statutory input path pending reviewer confirmation |
 | Sandbox mode | Missing bank or WPS data is a warning. In live mode it is a blocking exception |
 
 Every pay line carries the rule id and an explanation (the Explain drawer in the pay run), so a reviewer can trace each number to a rule.

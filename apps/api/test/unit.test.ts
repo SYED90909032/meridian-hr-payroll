@@ -51,6 +51,23 @@ describe('computeDay', () => {
     expect(r.overtimeMinutes).toBe(0);
     expect(r.lateMinutes).toBe(0);
   });
+  it('keeps an overnight shift as one worked interval when punches cross midnight', () => {
+    const overnight = { start: '22:00', end: '06:00', breakMin: 0, graceMin: 10, overnight: true };
+    const r = computeDay({ ...base, date: '2026-03-02', shift: overnight, punches: [
+      { t: at('2026-03-02', '22:00'), dir: 'in' }, { t: at('2026-03-03', '06:00'), dir: 'out' },
+    ] })!;
+    expect(r.date).toBe('2026-03-02');
+    expect(r.workedMinutes).toBe(480);
+    expect(r.overtimeMinutes).toBe(0);
+  });
+  it('supports end-date attribution by evaluating the same cross-midnight punches on the next local date', () => {
+    const overnight = { start: '22:00', end: '06:00', breakMin: 0, graceMin: 10, overnight: true };
+    const r = computeDay({ ...base, date: '2026-03-03', shift: overnight, punches: [
+      { t: at('2026-03-02', '22:00'), dir: 'in' }, { t: at('2026-03-03', '06:00'), dir: 'out' },
+    ] })!;
+    expect(r.date).toBe('2026-03-03');
+    expect(r.workedMinutes).toBe(480);
+  });
 });
 
 describe('leaveDaysX1000', () => {

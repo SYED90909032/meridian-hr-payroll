@@ -1,12 +1,13 @@
 import type { Db } from '../../db/tx.js';
 import { DEFAULT_TZ, DEFAULT_WEEKEND, addDays, computeDay, dayOfWeek, localParts, todayIn, type PunchLite, type ShiftLite } from './lib.js';
 
-export interface TenantTime { tz: string; weekend: number[] }
+export interface TenantTime { tz: string; weekend: number[]; overnightBucket: 'start' | 'end' }
 
 export async function tenantTime(db: Db, tenantId: string): Promise<TenantTime> {
-  const r = await db.query<{ settings: { timezone?: string; weekend?: number[] } }>('select settings from kernel.tenant where id = $1', [tenantId]);
+  const r = await db.query<{ settings: { timezone?: string; weekend?: number[]; overnight_bucket?: 'start' | 'end' } }>('select settings from kernel.tenant where id = $1', [tenantId]);
   const s = r.rows[0]?.settings ?? {};
-  return { tz: s.timezone ?? DEFAULT_TZ, weekend: Array.isArray(s.weekend) && s.weekend.length ? s.weekend : DEFAULT_WEEKEND };
+  return { tz: s.timezone ?? DEFAULT_TZ, weekend: Array.isArray(s.weekend) && s.weekend.length ? s.weekend : DEFAULT_WEEKEND,
+    overnightBucket: s.overnight_bucket === 'end' ? 'end' : 'start' };
 }
 
 export const validTimezone = (tz: string): boolean => { try { new Intl.DateTimeFormat('en', { timeZone: tz }); return true; } catch { return false; } };
@@ -41,10 +42,15 @@ export async function recomputeDays(db: Db, tenantId: string, employeeId: string
   const today = todayIn(tt.tz);
   let n = 0;
   for (const date of sorted) {
-    const row = sa.rows.find((a) => a.lower <= date && (!a.upper || date < a.upper));
+    const assignmentDate = tt.overnightBucket === 'end' ? addDays(date, -1) : date;
+    const row = sa.rows.find((a) => a.lower <= assignmentDate && (!a.upper || assignmentDate < a.upper));
     const shift: ShiftLite | null = row ? { start: row.start_time, end: row.end_time, breakMin: row.break_minutes, graceMin: row.grace_minutes, overnight: row.overnight } : null;
+    const punchDates = shift?.overnight
+      ? (tt.overnightBucket === 'end' ? [addDays(date, -1), date] : [date, addDays(date, 1)])
+      : [date];
+    const punches = punchDates.flatMap((d) => byDate.get(d) ?? []);
     const res = computeDay({
-      date, punches: byDate.get(date) ?? [], tz: tt.tz, shift, isHoliday: holidays.has(date), isWeekend: tt.weekend.includes(dayOfWeek(date)),
+      date, punches, tz: tt.tz, shift, isHoliday: holidays.has(date), isWeekend: tt.weekend.includes(dayOfWeek(date)),
       onLeave: lv.rows.some((l) => l.start_date <= date && l.end_date >= date), today,
     });
     if (!res) continue;

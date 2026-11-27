@@ -32,7 +32,10 @@ function inputVars(input: PayrollCalcInputV1): Map<string, bigint> {
   set('final.notice_pay_days_x1000', input.final?.notice_pay_days_x1000);
   set('flags.is_uae_national', input.employee.is_uae_national);
   set('flags.is_expat', !input.employee.is_uae_national);
+  set('flags.is_contractor', input.employee.employment_type === 'contractor');
   set('flags.is_final', input.run.type === 'final');
+  set('flags.is_off_cycle', input.run.type === 'off_cycle');
+  set('flags.leave_encashment_enabled', input.final?.leave_encashment_enabled !== false);
   return m;
 }
 
@@ -103,8 +106,29 @@ export function calculate(rawInput: unknown, pack: CompiledPack): PayrollResultV
 
   const lines: ResultLine[] = [];
   try {
+    const segmentedCodes = new Set(['BASIC', 'HOUSING', 'TRANSPORT', 'OTHER_ALLOW']);
     for (const r of src.rules) {
       if (r.when && !evalCond(r.when, env)) continue;
+      if (input.comp_segments?.length && segmentedCodes.has(r.code)) {
+        for (const segment of input.comp_segments) {
+          vars.set('comp.basic', toBig(segment.basic, 'comp.basic'));
+          vars.set('comp.housing', toBig(segment.housing, 'comp.housing'));
+          vars.set('comp.transport', toBig(segment.transport, 'comp.transport'));
+          vars.set('comp.other', toBig(segment.other, 'comp.other'));
+          vars.set('period.days_payable', toBig(segment.days, 'period.days_payable'));
+          const amount = evalExpr(r.amount, env);
+          if (amount < 0n) throw new RuleError(`rule ${r.id} produced a negative amount`);
+          if (amount === 0n && !r.always) continue;
+          lines.push({ code: r.code, label: r.label, kind: r.kind, amount_minor: toSafeNumber(amount, r.code), rule_id: r.id,
+            explain: `${r.explain} Segment ${segment.from} to ${segment.to} (${segment.days} payable day(s)).` });
+        }
+        vars.set('comp.basic', toBig(input.comp.basic, 'comp.basic'));
+        vars.set('comp.housing', toBig(input.comp.housing, 'comp.housing'));
+        vars.set('comp.transport', toBig(input.comp.transport, 'comp.transport'));
+        vars.set('comp.other', toBig(input.comp.other, 'comp.other'));
+        vars.set('period.days_payable', toBig(input.period.days_payable, 'period.days_payable'));
+        continue;
+      }
       const amt = evalExpr(r.amount, env);
       if (amt < 0n) throw new RuleError(`rule ${r.id} produced a negative amount`);
       vars.set(`line.${r.code}`, amt);

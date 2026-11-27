@@ -7,13 +7,16 @@ const add = (...a: Expr[]): Expr => ({ k: 'add', a });
 const mul = (a: Expr, b: Expr): Expr => ({ k: 'mul', a, b });
 const rate = (x: Expr, num: Expr, den: Expr): Expr => ({ k: 'mul_rate', x, num, den });
 const flag = (p: string, on = true): Cond => ({ k: 'cmp', op: on ? 'eq' : 'eq', a: ref(p), b: c(on ? 1 : 0) });
+const notContractor: Cond = flag('flags.is_contractor', false);
+const statutoryForEmployee = (condition: Cond): Cond => ({ k: 'and', a: [notContractor, condition] });
 
 const SRC_LAW = 'Federal Decree-Law 33/2021 (UAE Labour Law), via secondary sources; primary text to be checked by L2 reviewer';
 const SRC_GPSSA = 'https://gpssa.gov.ae/pages/en/help/faq (read 2026-11-25)';
 const NEEDS = 'needs_reviewer' as const;
 
 const fixedTotal = add(ref('comp.basic'), ref('comp.housing'), ref('comp.transport'), ref('comp.other'));
-const prorated = (p: string): Expr => rate(ref(p), ref('period.days_payable'), ref('period.days_in_period'));
+// This is an exposed L0 pack parameter; its legal interpretation needs reviewer sign-off.
+const prorated = (p: string): Expr => rate(ref(p), ref('period.days_payable'), ref('param.days_basis'));
 
 const rules: Rule[] = [
   { id: 'ae.earn.basic', code: 'BASIC', label: 'Basic salary', kind: 'earning', always: true, amount: prorated('comp.basic'),
@@ -33,26 +36,27 @@ const rules: Rule[] = [
     explain: 'Hourly basic (basic / days basis / hours per day) x overtime hours x premium (normal and special rates).',
   },
   { id: 'ae.ded.unpaid', code: 'UNPAID_LEAVE', label: 'Unpaid leave', kind: 'deduction', statutory: true,
+    when: statutoryForEmployee({ k: 'cmp', op: 'gt', a: ref('attendance.unpaid_leave_days_x1000'), b: c(0) }),
     amount: rate(fixedTotal, ref('attendance.unpaid_leave_days_x1000'), mul(ref('param.days_basis'), c(1000))),
     explain: 'Total fixed wage / days basis x unpaid leave days.' },
   {
-    id: 'ae.ded.gpssa_ee', code: 'GPSSA_EE', label: 'GPSSA pension (employee)', kind: 'deduction', statutory: true, when: flag('flags.is_uae_national'),
+    id: 'ae.ded.gpssa_ee', code: 'GPSSA_EE', label: 'GPSSA pension (employee)', kind: 'deduction', statutory: true, when: statutoryForEmployee(flag('flags.is_uae_national')),
     amount: rate({ k: 'clamp', x: ref('statutory.contribution_salary_minor'), lo: ref('param.gpssa_min'), hi: ref('param.gpssa_max') }, ref('param.gpssa_ee_num'), ref('param.gpssa_ee_den')),
     explain: 'Contribution salary (clamped to the GPSSA minimum and maximum) x employee rate. UAE nationals only.',
   },
   {
-    id: 'ae.er.gpssa_er', code: 'GPSSA_ER', label: 'GPSSA pension (employer)', kind: 'employer', statutory: true, when: flag('flags.is_uae_national'),
+    id: 'ae.er.gpssa_er', code: 'GPSSA_ER', label: 'GPSSA pension (employer)', kind: 'employer', statutory: true, when: statutoryForEmployee(flag('flags.is_uae_national')),
     amount: rate({ k: 'clamp', x: ref('statutory.contribution_salary_minor'), lo: ref('param.gpssa_min'), hi: ref('param.gpssa_max') }, ref('param.gpssa_er_num'), ref('param.gpssa_er_den')),
     explain: 'Contribution salary (clamped) x employer rate. UAE nationals only.',
   },
   {
-    id: 'ae.gov.gpssa', code: 'GPSSA_GOV', label: 'GPSSA government support', kind: 'gov', statutory: true, when: flag('flags.is_uae_national'),
+    id: 'ae.gov.gpssa', code: 'GPSSA_GOV', label: 'GPSSA government support', kind: 'gov', statutory: true, when: statutoryForEmployee(flag('flags.is_uae_national')),
     amount: rate({ k: 'clamp', x: ref('statutory.contribution_salary_minor'), lo: ref('param.gpssa_min'), hi: ref('param.gpssa_max') }, ref('param.gpssa_gov_num'), ref('param.gpssa_gov_den')),
     explain: 'Government support share, shown for completeness. Not paid by the employer.',
   },
   {
     id: 'ae.final.gratuity', code: 'GRATUITY', label: 'End-of-service gratuity', kind: 'earning', statutory: true,
-    when: { k: 'and', a: [flag('flags.is_final'), flag('flags.is_expat'), { k: 'cmp', op: 'gte', a: ref('final.service_days'), b: ref('param.grat_min_days') }] },
+    when: { k: 'and', a: [notContractor, flag('flags.is_final'), flag('flags.is_expat'), { k: 'cmp', op: 'gte', a: ref('final.service_days'), b: ref('param.grat_min_days') }] },
     amount: {
       k: 'min',
       a: [
@@ -69,17 +73,17 @@ const rules: Rule[] = [
     },
     explain: '21 days of basic wage per year for the first 5 years plus 30 days per year after, capped at 24 months of basic wage. Not payable under one year of service. Calculated per day of service.',
   },
-  { id: 'ae.final.leave', code: 'LEAVE_ENCASHMENT', label: 'Leave encashment', kind: 'earning', statutory: true, when: flag('flags.is_final'),
+  { id: 'ae.final.leave', code: 'LEAVE_ENCASHMENT', label: 'Leave encashment', kind: 'earning', statutory: true, when: { k: 'and', a: [notContractor, flag('flags.is_final'), flag('flags.leave_encashment_enabled')] },
     amount: rate(ref('comp.basic'), ref('final.leave_balance_days_x1000'), mul(ref('param.days_basis'), c(1000))),
     explain: 'Basic / days basis x unused annual leave days.' },
-  { id: 'ae.final.notice', code: 'NOTICE_PAY', label: 'Notice pay', kind: 'earning', statutory: true, when: flag('flags.is_final'),
+  { id: 'ae.final.notice', code: 'NOTICE_PAY', label: 'Notice pay', kind: 'earning', statutory: true, when: { k: 'and', a: [notContractor, flag('flags.is_final')] },
     amount: rate(fixedTotal, ref('final.notice_pay_days_x1000'), mul(ref('param.days_basis'), c(1000))),
     explain: 'Total fixed wage / days basis x notice days payable in lieu.' },
 ];
 
 export const UAE_PACK: PackSource = {
   id: 'ae-private-sector',
-  version: '0.1.0',
+  version: '0.2.0',
   jurisdiction: 'AE',
   currency: { code: 'AED', exponent: 2 },
   defaultRounding: 'half_up',
@@ -107,10 +111,10 @@ export const UAE_PACK: PackSource = {
   },
   tables: {},
   required: [
-    { path: 'comp.basic', nonZero: true },
+    { path: 'comp.basic', nonZero: true, when: flag('flags.is_off_cycle', false) },
     { path: 'period.days_in_period' },
     { path: 'period.days_payable' },
-    { path: 'statutory.contribution_salary_minor', nonZero: true, when: flag('flags.is_uae_national') },
+    { path: 'statutory.contribution_salary_minor', nonZero: true, when: statutoryForEmployee(flag('flags.is_uae_national')) },
     { path: 'final.service_days', when: flag('flags.is_final') },
   ],
   deductionCapParam: 'deduction_cap_bps',
