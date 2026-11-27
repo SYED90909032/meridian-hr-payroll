@@ -20,6 +20,10 @@ export interface Principal {
   mustChangePassword: boolean;
   /** Present for API keys and devices. */
   credentialId?: string;
+  /** API keys only: whether creation explicitly opted into the small write allow-list. */
+  allowWrite?: boolean;
+  rateLimitMax?: number;
+  rateLimitWindowSeconds?: number;
   deviceId?: string;
 }
 

@@ -18,6 +18,12 @@ const schema = z.object({
   OPENAI_API_KEY: z.string().optional(),
   OPENAI_API_BASE: z.string().optional(),
   ASSISTANT_MODEL: z.string().optional(),
+  ASSISTANT_ALLOWED_MODELS: z.string().default(''),
+  ASSISTANT_REQUEST_MAX_CHARS: z.coerce.number().int().min(100).max(20000).default(4000),
+  ASSISTANT_TIMEOUT_MS: z.coerce.number().int().min(1000).max(60000).default(15000),
+  API_KEY_MAX_LIFETIME_DAYS: z.coerce.number().int().min(1).max(3650).default(365),
+  API_KEY_EXPIRY_WARNING_DAYS: z.coerce.number().int().min(1).max(90).default(14),
+  WEBHOOK_DELIVERY_RETENTION_DAYS: z.coerce.number().int().min(1).max(3650).default(90),
   TRUST_PROXY: z.enum(['true', 'false']).default('false'),
   /** Object storage (ADR-025). `local` is for development and tests; production should use `s3`. */
   OBJECT_STORE: z.enum(['local', 's3']).default('local'),

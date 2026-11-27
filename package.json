@@ -11,6 +11,7 @@
     "build": "pnpm -r build",
     "db:migrate": "pnpm --filter @meridian/api db:migrate",
     "db:seed": "pnpm --filter @meridian/api db:seed",
+    "sdk:generate": "pnpm --filter @meridian/sdk sdk:generate",
     "audit": "pnpm audit --prod"
   }
 }

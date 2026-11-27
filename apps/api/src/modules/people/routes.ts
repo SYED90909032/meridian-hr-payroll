@@ -69,7 +69,7 @@ export function registerPeopleRoutes(svc: Services): void {
   }).strict();
 
   defineRoute(svc, {
-    method: 'POST', path: '/api/v1/people/employees', summary: 'Create an employee', tag: 'People', auth: 'session', perm: 'people.write', actors: ['hr'], idempotent: 'optional', body: empBody,
+    method: 'POST', path: '/api/v1/people/employees', summary: 'Create an employee', tag: 'People', auth: 'any', perm: 'people.write', actors: ['hr'], idempotent: 'optional', body: empBody,
     handler: async ({ db, ctx, body, audit }) => {
       const n = await db.query(`select coalesce(max(substring(employee_no from 2)::int), 0) + 1 as n from people.employee where employee_no ~ '^E[0-9]+$'`);
       const no = 'E' + String(n.rows[0].n).padStart(4, '0');
@@ -89,7 +89,7 @@ export function registerPeopleRoutes(svc: Services): void {
   });
 
   defineRoute(svc, {
-    method: 'PATCH', path: '/api/v1/people/employees/:id', summary: 'Update an employee (optimistic version check)', tag: 'People', auth: 'session', perm: 'people.write', actors: ['hr'],
+    method: 'PATCH', path: '/api/v1/people/employees/:id', summary: 'Update an employee (optimistic version check)', tag: 'People', auth: 'any', perm: 'people.write', actors: ['hr'],
     body: z.object({ version: z.number().int().min(1), firstName: short(80).optional(), lastName: short(80).optional(), workEmail: z.string().trim().toLowerCase().email().max(254).nullable().optional(),
       orgUnitId: uuid.nullable().optional(), managerId: uuid.nullable().optional(), jobTitle: short(120).nullable().optional(),
       employmentType: z.enum(['full_time', 'part_time', 'contractor']).optional(), isUaeNational: z.boolean().optional(), nationality: short(60).nullable().optional(),

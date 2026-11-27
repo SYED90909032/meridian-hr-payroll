@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { get, post } from '../api';
 import { Banner, PageHead, Spinner, useToast } from '../ui';
 
-interface Msg { role: string; content: string; created_at?: string }
+interface Msg { role: string; content: string; created_at?: string; sources?: Array<{ tool: string; record_count: number }> }
 const SUGGEST = ['What is my leave balance?', 'Who is on leave today?', 'How many people work here?', 'What approvals are waiting for me?', 'What are the next public holidays?'];
 
 export default function Assistant() {
@@ -34,8 +34,8 @@ export default function Assistant() {
     try {
       let id = conv;
       if (!id) { id = (await post<{ id: string }>('/assistant/conversations')).id; setConv(id); }
-      const r = await post<{ answer: string; tool: string | null }>(`/assistant/conversations/${id}/messages`, { content });
-      setMsgs((m) => [...m, { role: 'assistant', content: r.answer }]);
+      const r = await post<{ answer: string; tool: string | null; sources: Array<{ tool: string; record_count: number }> }>(`/assistant/conversations/${id}/messages`, { content });
+      setMsgs((m) => [...m, { role: 'assistant', content: r.answer, sources: r.sources }]);
     } catch (e: any) { toast(e.message, true); setMsgs((m) => m.slice(0, -1)); setText(content); } finally { setBusy(false); }
   };
   return (
@@ -45,7 +45,7 @@ export default function Assistant() {
       <div className="chatbox" ref={box} style={boxH ? { height: boxH } : undefined}>
         <div className="chat-body" ref={body}>
           {!msgs.length && <div className="empty"><h3>Ask a question</h3><div className="inline" style={{ justifyContent: 'center', marginTop: 10 }}>{SUGGEST.map((s) => <button key={s} className="btn sm" onClick={() => send(s)}>{s}</button>)}</div></div>}
-          {msgs.map((m, i) => <div key={i} className={'msg ' + m.role}>{m.content}</div>)}
+          {msgs.map((m, i) => <div key={i} className={'msg ' + m.role}>{m.content}{m.role === 'assistant' && m.sources?.length ? <div className="faint" style={{ marginTop: 8 }}>Sources: {m.sources.map((s) => `${s.tool} (${s.record_count})`).join(', ')}</div> : null}</div>)}
           {busy && <div className="msg assistant"><Spinner /></div>}
         </div>
         <form className="chat-input" onSubmit={(e) => { e.preventDefault(); send(text); }}>

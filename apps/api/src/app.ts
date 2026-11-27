@@ -50,8 +50,6 @@ export async function buildApp(cfg: Config, pools: Pools): Promise<{ app: Fastif
     hsts: cfg.NODE_ENV === 'production' ? { maxAge: 31536000, includeSubDomains: true } : false,
   });
   await app.register(cookie);
-  await app.register(rateLimit, { global: true, max: 600, timeWindow: '1 minute', allowList: [] });
-
   app.addHook('onSend', async (req, reply) => {
     if (req.url.startsWith('/api/')) { reply.header('Cache-Control', 'no-store'); reply.header('Pragma', 'no-cache'); }
   });
@@ -81,6 +79,14 @@ export async function buildApp(cfg: Config, pools: Pools): Promise<{ app: Fastif
     if (req.principal && ['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method) && req.headers['x-meridian-client'] !== 'web') {
       throw new HttpError(403, 'csrf', 'Missing client header');
     }
+  });
+  // Run after authentication so API keys get an isolated, creation-time budget. The plugin's
+  // built-in store remains in use; another workstream can replace it with Redis without changing this contract.
+  await app.register(rateLimit, {
+    global: true, hook: 'preHandler', allowList: [],
+    max: async (req) => (req.principal?.kind === 'apikey' ? req.principal.rateLimitMax ?? 600 : 600),
+    timeWindow: async (req) => (req.principal?.kind === 'apikey' ? (req.principal.rateLimitWindowSeconds ?? 60) * 1000 : 60_000),
+    keyGenerator: (req) => req.principal?.kind === 'apikey' ? `apikey:${req.principal.credentialId}` : req.ip,
   });
 
   app.setErrorHandler((err: Error & { statusCode?: number; code?: string; validation?: unknown }, req, reply) => {
@@ -155,7 +161,7 @@ async function principalFromApiKey(pools: Pools, key: string): Promise<Principal
   const m = /^mk_([a-z0-9]{8})_([A-Za-z0-9_-]{32,64})$/.exec(key);
   if (!m) return null;
   const r = await pools.auth.query(
-    `select k.id, k.tenant_id, k.key_hash, k.scopes, k.expires_at, k.revoked_at, k.created_by,
+    `select k.id, k.tenant_id, k.key_hash, k.scopes, k.expires_at, k.revoked_at, k.created_by, k.allow_write, k.rate_limit_max, k.rate_limit_window_seconds,
             u.email::text as email, u.display_name, u.disabled, m.employee_id, m.status as mstatus,
             coalesce((select array_agg(ra.role) from kernel.role_assignment ra where ra.user_id = k.created_by and ra.tenant_id = k.tenant_id and ra.revoked_at is null), '{}') as roles
        from plat.api_key k join kernel.user_account u on u.id = k.created_by
@@ -170,7 +176,8 @@ async function principalFromApiKey(pools: Pools, key: string): Promise<Principal
   const owned = permsFor(k.roles);
   const perms = new Set<Perm>((k.scopes as Perm[]).filter((s) => owned.has(s)));
   return { kind: 'apikey', userId: k.created_by, tenantId: k.tenant_id, employeeId: k.employee_id ?? null, sessionId: null, email: k.email, displayName: k.display_name,
-    roles: k.roles, perms, mfa: false, totpEnabled: false, stepUpAt: null, mustChangePassword: false, credentialId: k.id };
+    roles: k.roles, perms, mfa: false, totpEnabled: false, stepUpAt: null, mustChangePassword: false, credentialId: k.id,
+    allowWrite: k.allow_write, rateLimitMax: k.rate_limit_max, rateLimitWindowSeconds: k.rate_limit_window_seconds };
 }
 
 async function principalFromDeviceKey(pools: Pools, key: string): Promise<Principal | null> {
