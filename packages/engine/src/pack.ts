@@ -59,7 +59,7 @@ export const INPUT_PATHS = [
   'attendance.unpaid_leave_days_x1000', 'attendance.overtime_minutes', 'attendance.overtime_special_minutes',
   'statutory.contribution_salary_minor',
   'final.service_days', 'final.leave_balance_days_x1000', 'final.notice_pay_days_x1000',
-  'flags.is_uae_national', 'flags.is_final', 'flags.is_expat',
+  'flags.is_uae_national', 'flags.is_final', 'flags.is_expat', 'flags.is_contractor', 'flags.is_off_cycle', 'flags.leave_encashment_enabled',
 ] as const;
 
 export function compilePack(src: PackSource): CompiledPack {

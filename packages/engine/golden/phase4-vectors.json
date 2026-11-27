@@ -1,0 +1,26 @@
+{
+  "schema": "meridian.engine.golden.v1",
+  "pack": "ae-private-sector",
+  "pack_assurance": "L0",
+  "basis": "Expected values are independently calculated integer minor units: 1,000,000 / 30 = 33,333.33, rounded half-up; segment earnings are 1,000,000 x 15 / 30 + 2,000,000 x 15 / 30.",
+  "vectors": [
+    {
+      "id": "p4.proration.31day.one-day",
+      "rule_ids": ["ae.earn.basic"],
+      "input_summary": { "period_days": 31, "payable_days": 1, "basic_minor": 1000000 },
+      "expected": { "basic_minor": 33333 }
+    },
+    {
+      "id": "p4.comp-split.two-segments",
+      "rule_ids": ["ae.earn.basic"],
+      "input_summary": { "segments": [[15, 1000000], [15, 2000000]], "days_basis": 30 },
+      "expected": { "basic_segment_minor": [500000, 1000000], "basic_total_minor": 1500000 }
+    },
+    {
+      "id": "p4.off-cycle.adjustment-only",
+      "rule_ids": ["adjustment"],
+      "input_summary": { "run_type": "off_cycle", "bonus_minor": 250000 },
+      "expected": { "gross_minor": 250000, "net_minor": 250000 }
+    }
+  ]
+}

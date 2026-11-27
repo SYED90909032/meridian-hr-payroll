@@ -13,7 +13,7 @@ const short = (n: number) => z.string().trim().min(1).max(n);
 const minor = z.number().int().min(0).max(Number.MAX_SAFE_INTEGER);
 
 const EMP_COLS = `e.id, e.employee_no, e.first_name, e.last_name, e.work_email::text as work_email, e.org_unit_id, ou.name as org_unit_name, e.manager_id,
-  (m.first_name || ' ' || m.last_name) as manager_name, e.job_title, e.status, e.employment_type, e.hire_date, e.termination_date, e.is_uae_national, e.nationality, e.version`;
+  (m.first_name || ' ' || m.last_name) as manager_name, e.job_title, e.status, e.employment_type, e.hire_date, e.termination_date, e.contract_notice_days, e.is_uae_national, e.nationality, e.version`;
 const EMP_FROM = `people.employee e left join people.org_unit ou on ou.id = e.org_unit_id left join people.employee m on m.id = e.manager_id`;
 
 function pid(v: string | undefined): string {
@@ -64,7 +64,7 @@ export function registerPeopleRoutes(svc: Services): void {
 
   const empBody = z.object({
     firstName: short(80), lastName: short(80), workEmail: z.string().trim().toLowerCase().email().max(254).optional(), orgUnitId: uuid.optional(), managerId: uuid.optional(),
-    jobTitle: short(120).optional(), employmentType: z.enum(['full_time', 'part_time', 'contractor']).default('full_time'), hireDate: isoDate,
+    jobTitle: short(120).optional(), employmentType: z.enum(['full_time', 'part_time', 'contractor']).default('full_time'), contractNoticeDays: z.number().int().min(0).max(3660).default(0), hireDate: isoDate,
     isUaeNational: z.boolean().default(false), nationality: short(60).optional(),
   }).strict();
 
@@ -77,9 +77,9 @@ export function registerPeopleRoutes(svc: Services): void {
       if (body.orgUnitId && !(await db.query('select 1 from people.org_unit where id = $1', [body.orgUnitId])).rowCount) throw badRequest('Org unit not found');
       if (body.managerId && !(await db.query('select 1 from people.employee where id = $1', [body.managerId])).rowCount) throw badRequest('Manager not found');
       const r = await db.query(
-        `insert into people.employee (tenant_id, employee_no, first_name, last_name, work_email, org_unit_id, manager_id, job_title, employment_type, hire_date, is_uae_national, nationality)
-         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) returning id, employee_no`,
-        [ctx.tenantId, no, body.firstName, body.lastName, body.workEmail ?? null, org, body.managerId ?? null, body.jobTitle ?? null, body.employmentType, body.hireDate, body.isUaeNational, body.nationality ?? null]);
+        `insert into people.employee (tenant_id, employee_no, first_name, last_name, work_email, org_unit_id, manager_id, job_title, employment_type, contract_notice_days, hire_date, is_uae_national, nationality)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) returning id, employee_no`,
+        [ctx.tenantId, no, body.firstName, body.lastName, body.workEmail ?? null, org, body.managerId ?? null, body.jobTitle ?? null, body.employmentType, body.contractNoticeDays, body.hireDate, body.isUaeNational, body.nationality ?? null]);
       const e = r.rows[0];
       await db.query(`insert into people.employee_event (tenant_id, employee_id, kind, effective_date, detail, created_by) values ($1, $2, 'hired', $3, '{}', $4)`, [ctx.tenantId, e.id, body.hireDate, ctx.userId]);
       // Opening leave entitlement is created by the time module on the first leave query; nothing else to do here.
@@ -92,7 +92,7 @@ export function registerPeopleRoutes(svc: Services): void {
     method: 'PATCH', path: '/api/v1/people/employees/:id', summary: 'Update an employee (optimistic version check)', tag: 'People', auth: 'session', perm: 'people.write', actors: ['hr'],
     body: z.object({ version: z.number().int().min(1), firstName: short(80).optional(), lastName: short(80).optional(), workEmail: z.string().trim().toLowerCase().email().max(254).nullable().optional(),
       orgUnitId: uuid.nullable().optional(), managerId: uuid.nullable().optional(), jobTitle: short(120).nullable().optional(),
-      employmentType: z.enum(['full_time', 'part_time', 'contractor']).optional(), isUaeNational: z.boolean().optional(), nationality: short(60).nullable().optional(),
+      employmentType: z.enum(['full_time', 'part_time', 'contractor']).optional(), contractNoticeDays: z.number().int().min(0).max(3660).optional(), isUaeNational: z.boolean().optional(), nationality: short(60).nullable().optional(),
       status: z.enum(['active', 'on_leave']).optional(), effectiveDate: isoDate.optional() }).strict(),
     handler: async ({ db, ctx, params, body, audit }) => {
       const id = pid(params.id);
@@ -103,7 +103,7 @@ export function registerPeopleRoutes(svc: Services): void {
       if (e.version !== body.version) throw conflict('Someone else changed this record. Reload and try again.', 'version_conflict');
       const map: Record<string, [string, unknown]> = {
         firstName: ['first_name', body.firstName], lastName: ['last_name', body.lastName], workEmail: ['work_email', body.workEmail], orgUnitId: ['org_unit_id', body.orgUnitId],
-        managerId: ['manager_id', body.managerId], jobTitle: ['job_title', body.jobTitle], employmentType: ['employment_type', body.employmentType],
+        managerId: ['manager_id', body.managerId], jobTitle: ['job_title', body.jobTitle], employmentType: ['employment_type', body.employmentType], contractNoticeDays: ['contract_notice_days', body.contractNoticeDays],
         isUaeNational: ['is_uae_national', body.isUaeNational], nationality: ['nationality', body.nationality], status: ['status', body.status],
       };
       const sets: string[] = []; const args: unknown[] = []; const changed: string[] = [];

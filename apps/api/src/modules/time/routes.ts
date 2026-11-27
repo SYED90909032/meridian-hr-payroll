@@ -14,14 +14,14 @@ const FUTURE_SKEW_MS = 5 * 60_000;
 export function registerTimeRoutes(svc: Services): void {
   // ---------------------------------------------------------------- settings
   defineRoute(svc, {
-    method: 'GET', path: '/api/v1/time/settings', summary: 'Time zone and weekend days', tag: 'Time', auth: 'session',
+    method: 'GET', path: '/api/v1/time/settings', summary: 'Time zone, weekend days, and overnight attribution', tag: 'Time', auth: 'session',
     handler: async ({ db, ctx }) => tenantTime(db, ctx.tenantId),
   });
   defineRoute(svc, {
-    method: 'PUT', path: '/api/v1/time/settings', summary: 'Change time zone and weekend days', tag: 'Time', auth: 'session', perm: 'time.admin', actors: ['iam'],
-    body: z.object({ tz: z.string().max(60).refine(validTimezone, 'Unknown time zone'), weekend: z.array(z.number().int().min(0).max(6)).min(1).max(3).refine((a) => new Set(a).size === a.length, 'Duplicate day') }).strict(),
+    method: 'PUT', path: '/api/v1/time/settings', summary: 'Change time zone, weekend days, and overnight attribution', tag: 'Time', auth: 'session', perm: 'time.admin', actors: ['iam'],
+    body: z.object({ tz: z.string().max(60).refine(validTimezone, 'Unknown time zone'), weekend: z.array(z.number().int().min(0).max(6)).min(1).max(3).refine((a) => new Set(a).size === a.length, 'Duplicate day'), overnightBucket: z.enum(['start', 'end']).default('start') }).strict(),
     handler: async ({ db, ctx, body, audit }) => {
-      await db.query(`update kernel.tenant set settings = settings || $2::jsonb where id = $1`, [ctx.tenantId, JSON.stringify({ timezone: body.tz, weekend: body.weekend })]);
+      await db.query(`update kernel.tenant set settings = settings || $2::jsonb where id = $1`, [ctx.tenantId, JSON.stringify({ timezone: body.tz, weekend: body.weekend, overnight_bucket: body.overnightBucket })]);
       await audit('time.settings_changed', 'tenant', ctx.tenantId, body);
       return { ok: true };
     },
@@ -109,7 +109,7 @@ export function registerTimeRoutes(svc: Services): void {
           [id, ctx.tenantId, e.id, p.deviceId, new Date(t), x.direction, source, x.confidence, receipt, x.idempotencyKey]);
         const set = touched.get(e.id) ?? new Set<string>();
         const local = localParts(t, tt.tz).date;
-        set.add(local); set.add(addDays(local, -1));
+        set.add(local); set.add(addDays(local, -1)); set.add(addDays(local, 1));
         touched.set(e.id, set);
         receipts.push({ idempotencyKey: x.idempotencyKey, receiptId: receipt, status: 'accepted' });
       }
@@ -146,7 +146,7 @@ export function registerTimeRoutes(svc: Services): void {
         [id, ctx.tenantId, body.employeeId, new Date(t), body.direction, randomUUID(), `manual:${id}`]);
       const tt = await tenantTime(db, ctx.tenantId);
       const d = localParts(t, tt.tz).date;
-      await recomputeDays(db, ctx.tenantId, body.employeeId, [d, addDays(d, -1)], tt);
+      await recomputeDays(db, ctx.tenantId, body.employeeId, [d, addDays(d, -1), addDays(d, 1)], tt);
       await audit('punch.manual', 'employee', body.employeeId, { punch_id: id, event_time: body.eventTime, direction: body.direction, reason: body.reason });
       return { status: 201, body: { id } };
     },
